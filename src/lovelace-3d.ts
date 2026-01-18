@@ -71,5 +71,5 @@ if (!customElements.get("lovelace-3d")) {
 ;(window as any).customCards.push({
   type: "lovelace-3d",
   name: "Lovelace 3D",
-  description: "A tiny Vue-based 3D-tilting card",
+  description: "A 3D visualization card for your home automation system",
 })

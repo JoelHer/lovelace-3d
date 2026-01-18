@@ -11,11 +11,6 @@
           Set an <code>entity</code> in the card config to display a state.
         </div>
 
-        <div class="meta">
-          <span class="pill">Vue</span>
-          <span class="pill">Vite</span>
-          <span class="pill">custom:lovelace-3d</span>
-        </div>
         <div ref="threeMount" class="three-surface" aria-label="Three.js preview" />
       </div>
     </div>
@@ -33,7 +28,10 @@ import {
   PerspectiveCamera,
   Scene,
   WebGLRenderer,
+  MOUSE,
+  TOUCH,
 } from "three"
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js"
 import EntityState from "./components/EntityState.vue"
 
 const props = defineProps<{
@@ -56,21 +54,25 @@ let scene: Scene | null = null
 let cube: Mesh<BoxGeometry, MeshStandardMaterial> | null = null
 let frameId: number | null = null
 let resizeObserver: ResizeObserver | null = null
+let controls: OrbitControls | null = null
 
 const handleResize = () => {
   if (!renderer || !camera || !threeMount.value) return
   const rect = threeMount.value.getBoundingClientRect()
   const width = Math.max(1, Math.round(rect.width) || threeMount.value.clientWidth || 300)
-  const height = Math.max(1, Math.round(rect.height) || threeMount.value.clientHeight || 220)
+  const fallbackHeight = Math.round(width * 0.625)
+  const height =
+    Math.max(1, Math.round(rect.height)) ||
+    Math.max(1, threeMount.value.clientHeight) ||
+    Math.max(1, fallbackHeight)
   renderer.setSize(width, height, false)
   camera.aspect = width / height
   camera.updateProjectionMatrix()
 }
 
 const animate = () => {
-  if (!renderer || !scene || !camera || !cube) return
-  cube.rotation.x += 0.01
-  cube.rotation.y += 0.015
+  if (!renderer || !scene || !camera) return
+  controls?.update()
   renderer.render(scene, camera)
   frameId = window.requestAnimationFrame(animate)
 }
@@ -107,6 +109,23 @@ const setupThree = () => {
   handleResize()
   resizeObserver = new ResizeObserver(() => handleResize())
   resizeObserver.observe(threeMount.value)
+
+  controls = new OrbitControls(camera, renderer.domElement)
+  controls.target.set(0, 0, 0)
+  controls.enableDamping = true
+  controls.dampingFactor = 0.08
+  controls.enableZoom = true
+  controls.mouseButtons = {
+    LEFT: MOUSE.ROTATE,
+    MIDDLE: MOUSE.ROTATE,
+    RIGHT: MOUSE.PAN,
+  }
+  controls.touches = {
+    ONE: TOUCH.ROTATE,
+    TWO: TOUCH.PAN,
+  }
+  controls.update()
+
   animate()
 }
 
@@ -127,6 +146,9 @@ onBeforeUnmount(() => {
     cube.material.dispose()
     cube = null
   }
+
+  controls?.dispose()
+  controls = null
 
   resizeObserver?.disconnect()
   resizeObserver = null
