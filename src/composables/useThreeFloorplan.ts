@@ -11,6 +11,9 @@ import {
   DoubleSide,
   MOUSE,
   TOUCH,
+  Raycaster,
+  Mesh,
+  Vector2,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
@@ -34,28 +37,29 @@ export function useThreeFloorplan(): UseThreeFloorplan {
   let floorGroup: Group | null = null;
   let floorMat: MeshStandardMaterial | null = null;
 
+  
   const handleResize = (el?: HTMLElement) => {
     if (!renderer || !camera || !el) return;
     const rect = el.getBoundingClientRect();
     const width = Math.max(1, Math.round(rect.width) || el.clientWidth || 300);
     const fallbackHeight = Math.round(width * 0.625);
     const height =
-      Math.max(1, Math.round(rect.height)) ||
-      Math.max(1, el.clientHeight) ||
-      Math.max(1, fallbackHeight);
-
+    Math.max(1, Math.round(rect.height)) ||
+    Math.max(1, el.clientHeight) ||
+    Math.max(1, fallbackHeight);
+    
     renderer.setSize(width, height, false);
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
   };
-
+  
   const animate = () => {
     if (!renderer || !scene || !camera) return;
     controls?.update();
     renderer.render(scene, camera);
     frameId = window.requestAnimationFrame(animate);
   };
-
+  
   const mount = (el: HTMLElement, rooms: Room[]) => {
     // Scene
     scene = new Scene();
@@ -126,6 +130,36 @@ export function useThreeFloorplan(): UseThreeFloorplan {
     handleResize(el);
     resizeObserver = new ResizeObserver(() => handleResize(el));
     resizeObserver.observe(el);
+
+    // Click detection (raycast rooms)
+    const raycaster = new Raycaster();
+    const mouse = new Vector2();
+
+    
+    const onPointerDown = (e: PointerEvent) => {
+      if (!renderer || !camera || !floorGroup) return;
+
+      const r = renderer.domElement.getBoundingClientRect();
+      mouse.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+      mouse.y = -(((e.clientY - r.top) / r.height) * 2 - 1);
+
+      raycaster.setFromCamera(mouse, camera);
+
+      // Collect all meshes in the floorGroup
+      const floorMeshes: Mesh[] = [];
+      floorGroup.traverse((obj) => {
+        if (obj instanceof Mesh) floorMeshes.push(obj);
+      });
+
+      const hits = raycaster.intersectObjects(floorMeshes, true);
+      const firstHit = hits[0];
+      if (!firstHit) return;
+
+      const hitObj = firstHit.object as Mesh;
+      console.log("Clicked room:", hitObj.userData.roomId, hitObj.userData.roomName);
+    };
+
+    renderer.domElement.addEventListener("pointerdown", onPointerDown);
 
     // Start render loop
     animate();

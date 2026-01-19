@@ -51,3 +51,37 @@
   height: 100%;
   display: block;
 }
+
+.three-shell {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.loader-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: color-mix(in srgb, var(--card-background-color) 72%, transparent);
+  color: var(--secondary-text-color);
+  font-weight: 600;
+  z-index: 1;
+}
+
+.loader-spinner {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 3px solid color-mix(in srgb, var(--primary-color) 40%, transparent);
+  border-top-color: var(--primary-color);
+  animation: spin 0.85s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
