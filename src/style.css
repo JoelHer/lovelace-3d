@@ -58,6 +58,81 @@
   overflow: hidden;
 }
 
+.room-popup-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+}
+
+.room-popup {
+  position: absolute;
+  left: clamp(12px, var(--popup-x), calc(100% - 12px));
+  top: clamp(12px, var(--popup-y), calc(100% - 12px));
+  transform: translate(-50%, var(--popup-shift-y));
+
+  min-width: 210px;
+  max-width: min(300px, calc(100% - 24px));
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--divider-color) 70%, transparent);
+  background: color-mix(in srgb, var(--card-background-color) 92%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+  z-index: 4;
+}
+
+.room-popup .close-btn {
+  float: right;
+  border: 0;
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--secondary-text-color);
+  background: color-mix(in srgb, var(--secondary-background-color) 70%, transparent);
+}
+
+.room-popup .room-name {
+  font-size: 14px;
+  font-weight: 700;
+  margin: 2px 0 2px 0;
+}
+
+.room-popup .room-id {
+  font-size: 11px;
+  opacity: 0.75;
+  margin-bottom: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.room-popup .actions {
+  display: grid;
+  gap: 8px;
+}
+
+.room-popup .action-btn {
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--primary-color) 45%, transparent);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  color: var(--primary-text-color);
+  background: color-mix(in srgb, var(--primary-color) 16%, transparent);
+}
+
+.room-popup .action-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.room-popup .empty {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
 .loader-overlay {
   position: absolute;
   inset: 0;

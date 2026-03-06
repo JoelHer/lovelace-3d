@@ -23,8 +23,22 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { Room, Vec2XZ } from "../three/types";
 import { makeRoomFloorMesh } from "../three/floorplan";
 
+export type RoomClickEvent = {
+  roomId: string;
+  roomName: string;
+  x: number;
+  y: number;
+  worldX: number;
+  worldY: number;
+  worldZ: number;
+};
+
+type MountOptions = {
+  onRoomClick?: (event: RoomClickEvent) => void;
+};
+
 type UseThreeFloorplan = {
-  mount(el: HTMLElement, rooms: Room[]): void;
+  mount(el: HTMLElement, rooms: Room[], options?: MountOptions): void;
   updateRooms(rooms: Room[]): void;
   isMounted(): boolean;
   unmount(): void;
@@ -37,6 +51,7 @@ const BOTTOM_ALPHA = 0.9;
 const TOP_ALPHA = 0.2;
 const MERGE_SCALE = 100; // 1 / scale == merge tolerance (0.01)
 const FRONT_WALL_HIDE_THRESHOLD = 0.02;
+const CLICK_MOVE_TOLERANCE_PX = 6;
 
 const roundKey = (v: number) => (Math.round(v * MERGE_SCALE) / MERGE_SCALE).toFixed(2);
 
@@ -175,7 +190,9 @@ export function useThreeFloorplan(): UseThreeFloorplan {
   let wallGroup: Group | null = null;
   let wallMat: MeshStandardMaterial | null = null;
   const viewDirUniform = { value: new Vector3(0, 0, -1) };
-  let pointerHandler: ((e: PointerEvent) => void) | null = null;
+  let pointerDownHandler: ((e: PointerEvent) => void) | null = null;
+  let pointerUpHandler: ((e: PointerEvent) => void) | null = null;
+  let pointerCancelHandler: (() => void) | null = null;
   const cameraSide = new Vector2();
   const wallSide = new Vector2();
   const handleResize = (el?: HTMLElement) => {
@@ -228,7 +245,7 @@ export function useThreeFloorplan(): UseThreeFloorplan {
     frameId = window.requestAnimationFrame(animate);
   };
 
-  const mount = (el: HTMLElement, rooms: Room[]) => {
+  const mount = (el: HTMLElement, rooms: Room[], options?: MountOptions) => {
     // Scene
     scene = new Scene();
 
@@ -307,13 +324,25 @@ export function useThreeFloorplan(): UseThreeFloorplan {
     // Click detection (raycast rooms)
     const raycaster = new Raycaster();
     const mouse = new Vector2();
+    let pointerStart:
+      | {
+          pointerId: number;
+          clientX: number;
+          clientY: number;
+          button: number;
+          isPrimary: boolean;
+        }
+      | null = null;
 
-    const onPointerDown = (e: PointerEvent) => {
+    const pickRoomAt = (clientX: number, clientY: number) => {
       if (!renderer || !camera || !floorGroup) return;
 
       const r = renderer.domElement.getBoundingClientRect();
-      mouse.x = ((e.clientX - r.left) / r.width) * 2 - 1;
-      mouse.y = -(((e.clientY - r.top) / r.height) * 2 - 1);
+      const localX = clientX - r.left;
+      const localY = clientY - r.top;
+      if (localX < 0 || localY < 0 || localX > r.width || localY > r.height) return;
+      mouse.x = (localX / r.width) * 2 - 1;
+      mouse.y = -((localY / r.height) * 2 - 1);
 
       raycaster.setFromCamera(mouse, camera);
 
@@ -328,11 +357,56 @@ export function useThreeFloorplan(): UseThreeFloorplan {
       if (!firstHit) return;
 
       const hitObj = firstHit.object as Mesh;
-      console.log("Clicked room:", hitObj.userData.roomId, hitObj.userData.roomName);
+      return {
+        roomId: String(hitObj.userData.roomId ?? ""),
+        roomName: String(hitObj.userData.roomName ?? ""),
+        x: localX,
+        y: localY,
+        worldX: firstHit.point.x,
+        worldY: firstHit.point.y,
+        worldZ: firstHit.point.z,
+      } as RoomClickEvent;
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (!e.isPrimary) return;
+      pointerStart = {
+        pointerId: e.pointerId,
+        clientX: e.clientX,
+        clientY: e.clientY,
+        button: e.button,
+        isPrimary: e.isPrimary,
+      };
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      if (!pointerStart) return;
+      const start = pointerStart;
+      pointerStart = null;
+
+      if (!e.isPrimary || !start.isPrimary) return;
+      if (e.pointerId !== start.pointerId) return;
+      if (e.pointerType === "mouse" && (start.button !== 0 || e.button !== 0)) return;
+
+      const dx = e.clientX - start.clientX;
+      const dy = e.clientY - start.clientY;
+      if (dx * dx + dy * dy > CLICK_MOVE_TOLERANCE_PX * CLICK_MOVE_TOLERANCE_PX) return;
+
+      const roomEvent = pickRoomAt(e.clientX, e.clientY);
+      if (!roomEvent) return;
+      options?.onRoomClick?.(roomEvent);
+    };
+
+    const clearPointerStart = () => {
+      pointerStart = null;
     };
 
     renderer.domElement.addEventListener("pointerdown", onPointerDown);
-    pointerHandler = onPointerDown;
+    renderer.domElement.addEventListener("pointerup", onPointerUp);
+    renderer.domElement.addEventListener("pointercancel", clearPointerStart);
+    pointerDownHandler = onPointerDown;
+    pointerUpHandler = onPointerUp;
+    pointerCancelHandler = clearPointerStart;
 
     mounted = true;
     // Start render loop
@@ -399,9 +473,19 @@ export function useThreeFloorplan(): UseThreeFloorplan {
     controls?.dispose();
     controls = null;
 
-    if (renderer?.domElement && pointerHandler) {
-      renderer.domElement.removeEventListener("pointerdown", pointerHandler);
-      pointerHandler = null;
+    if (renderer?.domElement) {
+      if (pointerDownHandler) {
+        renderer.domElement.removeEventListener("pointerdown", pointerDownHandler);
+        pointerDownHandler = null;
+      }
+      if (pointerUpHandler) {
+        renderer.domElement.removeEventListener("pointerup", pointerUpHandler);
+        pointerUpHandler = null;
+      }
+      if (pointerCancelHandler) {
+        renderer.domElement.removeEventListener("pointercancel", pointerCancelHandler);
+        pointerCancelHandler = null;
+      }
     }
 
     // Dispose room meshes geometry (materials shared)
