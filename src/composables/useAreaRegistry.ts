@@ -17,15 +17,17 @@ export function useAreaRegistry(hassRef: Ref<any | null>) {
     return map;
   });
 
-  const ready = computed(() => loaded.value && !loading.value);
+  const ready = computed(() => loaded.value || areas.value.length > 0);
 
   async function refresh() {
     const hass = hassRef.value;
     if (!hass?.callWS) return;
 
+    const hadData = areas.value.length > 0;
     loading.value = true;
     try {
       error.value = null;
+      console.log("[lovelace-3d] CALLING AREAS... JOHN PORKIE");
       const res: AreaEntry[] = await hass.callWS({
         type: "config/area_registry/list",
       });
@@ -33,8 +35,10 @@ export function useAreaRegistry(hassRef: Ref<any | null>) {
       loaded.value = true;
     } catch (e) {
       error.value = e;
-      areas.value = [];
-      loaded.value = false;
+      if (!hadData) {
+        areas.value = [];
+        loaded.value = false;
+      }
       console.warn("[lovelace-3d] Failed to load areas", e);
     } finally {
       loading.value = false;
@@ -54,7 +58,6 @@ export function useAreaRegistry(hassRef: Ref<any | null>) {
     hassRef,
     (h: any | null) => {
       if (h) {
-        loaded.value = false;
         refresh();
       } else {
         areas.value = [];

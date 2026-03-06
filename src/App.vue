@@ -97,10 +97,12 @@ onMounted(() => {
     () => ({ ready: areasReady.value, rooms: rooms.value }),
     ({ ready, rooms }) => {
       if (!threeMount.value) return;
+      if (!ready) return;
 
-      three.unmount();
-      if (ready) {
+      if (!three.isMounted()) {
         three.mount(threeMount.value, rooms);
+      } else {
+        three.updateRooms(rooms);
       }
     },
     { deep: true, immediate: true }
