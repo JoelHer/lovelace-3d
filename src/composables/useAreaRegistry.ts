@@ -10,6 +10,7 @@ export function useAreaRegistry(hassRef: Ref<any | null>) {
   const error = ref<unknown>(null);
   const loading = ref(false);
   const loaded = ref(false);
+  let activeConnection: unknown = null;
 
   const areasById = computed<Record<string, AreaEntry>>(() => {
     const map: Record<string, AreaEntry> = {};
@@ -27,7 +28,6 @@ export function useAreaRegistry(hassRef: Ref<any | null>) {
     loading.value = true;
     try {
       error.value = null;
-      console.log("[lovelace-3d] CALLING AREAS... JOHN PORKIE");
       const res: AreaEntry[] = await hass.callWS({
         type: "config/area_registry/list",
       });
@@ -53,17 +53,32 @@ export function useAreaRegistry(hassRef: Ref<any | null>) {
     return areasById.value[areaId]?.name ?? "";
   }
 
-  // Auto-load when hass becomes available / changes
+  function reset() {
+    areas.value = [];
+    loaded.value = false;
+    error.value = null;
+    activeConnection = null;
+  }
+
+  // Auto-load only when the HA session/connection changes, not on every state push.
   watch(
     hassRef,
-    (h: any | null) => {
-      if (h) {
-        refresh();
-      } else {
-        areas.value = [];
-        loaded.value = false;
-        error.value = null;
+    (hass) => {
+      if (!hass) {
+        reset();
+        return;
       }
+
+      const nextConnection = hass.connection ?? null;
+      if (nextConnection) {
+        if (loaded.value && activeConnection === nextConnection) return;
+        activeConnection = nextConnection;
+        refresh();
+        return;
+      }
+
+      // Fallback for environments where `connection` is not exposed.
+      if (!loaded.value) refresh();
     },
     { immediate: true }
   );

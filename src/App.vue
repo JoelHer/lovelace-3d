@@ -92,20 +92,32 @@ const rooms = computed<Room[]>(() => {
   return parsed;
 });
 
+const roomsSignature = computed(() =>
+  rooms.value
+    .map(
+      (room) =>
+        `${room.id}|${room.name}|${room.polygon
+          .map(([x, z]) => `${x.toFixed(4)},${z.toFixed(4)}`)
+          .join(";")}`
+    )
+    .join("||")
+);
+
 onMounted(() => {
   watch(
-    () => ({ ready: areasReady.value, rooms: rooms.value }),
-    ({ ready, rooms }) => {
+    [areasReady, roomsSignature],
+    ([ready]) => {
       if (!threeMount.value) return;
       if (!ready) return;
+      const nextRooms = rooms.value;
 
       if (!three.isMounted()) {
-        three.mount(threeMount.value, rooms);
+        three.mount(threeMount.value, nextRooms);
       } else {
-        three.updateRooms(rooms);
+        three.updateRooms(nextRooms);
       }
     },
-    { deep: true, immediate: true }
+    { immediate: true }
   );
 });
 </script>
