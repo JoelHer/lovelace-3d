@@ -83,6 +83,11 @@ type PopupAction = {
   closeOnRun: boolean;
 };
 
+type RoomActionConfig = {
+  configured: boolean;
+  actions: PopupAction[];
+};
+
 const roomPopup = ref<PopupState | null>(null);
 
 function toRecord(value: unknown): Record<string, unknown> | undefined {
@@ -124,57 +129,16 @@ function applyActionTemplates(value: unknown, popup: PopupState): unknown {
   return value;
 }
 
-const rooms = computed<Room[]>(() => {
-  if (!areasReady.value) return [];
-
-  const rawRooms = cfg.value.rooms;
-  if (!Array.isArray(rawRooms)) return [];
-
-  const parsed: Room[] = [];
-
-  for (const room of rawRooms) {
-    if (!room || typeof room !== "object") continue;
-
-    const areaId = String((room as any).area ?? "");
-    if (!areaId) continue;
-
-    // ✅ Validate *only once registry is loaded*
-    if (areasReady.value && !isValidArea(areaId)) {
-      console.warn(`[lovelace-3d] Unknown area "${areaId}" in room config`, room);
-      continue;
-    }
-
-    const polygonRaw = (room as any).polygon;
-    if (!Array.isArray(polygonRaw)) continue;
-
-    const polygon: Vec2XZ[] = [];
-    for (const point of polygonRaw) {
-      if (!Array.isArray(point) || point.length < 2) continue;
-      const [x, z] = point;
-      const nx = Number(x);
-      const nz = Number(z);
-      if (!Number.isFinite(nx) || !Number.isFinite(nz)) continue;
-      polygon.push([nx, nz] as const);
-    }
-    if (polygon.length < 3) continue;
-
-    const name =
-      String((room as any).name ?? "") ||
-      (areasReady.value ? getAreaName(areaId) : "") ||
-      areaId;
-
-    parsed.push({ id: areaId, name, polygon });
+function parsePopupActions(rawActions: unknown, contextLabel: string): RoomActionConfig {
+  if (rawActions === undefined) {
+    return { configured: false, actions: [] };
   }
-
-  return parsed;
-});
-
-const popupActions = computed<PopupAction[]>(() => {
-  const rawActions = cfg.value.room_popup_actions ?? cfg.value.room_actions;
-  if (!Array.isArray(rawActions)) return [];
-
+  if (!Array.isArray(rawActions)) {
+    console.warn(`[lovelace-3d] ${contextLabel} actions must be an array`, rawActions);
+    return { configured: true, actions: [] };
+  }
   const parsed: PopupAction[] = [];
-  for (let i = 0; i < rawActions.length; i++) {
+  for (let i = 0; i < rawActions.length; i += 1) {
     const raw = rawActions[i];
     if (!raw || typeof raw !== "object") continue;
 
@@ -195,11 +159,86 @@ const popupActions = computed<PopupAction[]>(() => {
     });
   }
 
+  return { configured: true, actions: parsed };
+}
+
+const roomEntries = computed<
+  {
+    room: Room;
+    actionConfig: RoomActionConfig;
+  }[]
+>(() => {
+  if (!areasReady.value) return [];
+
+  const rawRooms = cfg.value.rooms;
+  if (!Array.isArray(rawRooms)) return [];
+
+  const parsed: {
+    room: Room;
+    actionConfig: RoomActionConfig;
+  }[] = [];
+
+  for (const room of rawRooms) {
+    if (!room || typeof room !== "object") continue;
+
+    const roomObj = room as Record<string, unknown>;
+    const areaId = String(roomObj.area ?? "");
+    if (!areaId) continue;
+
+    if (areasReady.value && !isValidArea(areaId)) {
+      console.warn(`[lovelace-3d] Unknown area "${areaId}" in room config`, room);
+      continue;
+    }
+
+    const polygonRaw = roomObj.polygon;
+    if (!Array.isArray(polygonRaw)) continue;
+
+    const polygon: Vec2XZ[] = [];
+    for (const point of polygonRaw) {
+      if (!Array.isArray(point) || point.length < 2) continue;
+      const [x, z] = point;
+      const nx = Number(x);
+      const nz = Number(z);
+      if (!Number.isFinite(nx) || !Number.isFinite(nz)) continue;
+      polygon.push([nx, nz] as const);
+    }
+    if (polygon.length < 3) continue;
+
+    const name = String(roomObj.name ?? "") || (areasReady.value ? getAreaName(areaId) : "") || areaId;
+
+    const rawRoomActions = roomObj.room_popup_actions ?? roomObj.room_actions;
+    parsed.push({
+      room: { id: areaId, name, polygon },
+      actionConfig: parsePopupActions(rawRoomActions, `Room "${areaId}"`),
+    });
+  }
+
   return parsed;
 });
 
+const rooms = computed<Room[]>(() => roomEntries.value.map((entry) => entry.room));
+
+const roomActionConfigs = computed<Record<string, RoomActionConfig>>(() => {
+  const map: Record<string, RoomActionConfig> = {};
+  for (const entry of roomEntries.value) {
+    map[entry.room.id] = entry.actionConfig;
+  }
+  return map;
+});
+
+const globalPopupActionConfig = computed<RoomActionConfig>(() =>
+  parsePopupActions(cfg.value.room_popup_actions ?? cfg.value.room_actions, "Card")
+);
+
+const activePopupActions = computed<PopupAction[]>(() => {
+  if (!roomPopup.value) return [];
+  const local = roomActionConfigs.value[roomPopup.value.roomId];
+  if (local?.configured) return local.actions;
+  return globalPopupActionConfig.value.actions;
+});
+
 const popupActionButtons = computed(() =>
-  popupActions.value.map((action) => ({
+  activePopupActions.value.map((action) => ({
     id: action.id,
     label: action.label,
   }))
@@ -235,7 +274,7 @@ async function runRoomPopupAction(actionId: string) {
   const popup = roomPopup.value;
   if (!h?.callService || !popup) return;
 
-  const action = popupActions.value.find((entry) => entry.id === actionId);
+  const action = activePopupActions.value.find((entry) => entry.id === actionId);
   if (!action) return;
 
   const [domain, service] = action.service.split(".", 2);

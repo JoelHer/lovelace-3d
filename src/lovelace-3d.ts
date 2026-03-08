@@ -59,6 +59,19 @@ class Lovelace3DCard extends HTMLElement {
   getCardSize() {
     return 3
   }
+
+  static async getConfigElement() {
+    const { ensureLovelace3DEditorDefined } = await import("./lovelace-3d-editor")
+    ensureLovelace3DEditorDefined()
+    return document.createElement("lovelace-3d-editor")
+  }
+
+  static getStubConfig() {
+    return {
+      type: "custom:lovelace-3d",
+      rooms: [],
+    }
+  }
 }
 
 // Register element once
