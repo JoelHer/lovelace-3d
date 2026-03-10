@@ -58,10 +58,153 @@
   overflow: hidden;
 }
 
+.floater-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.floater-popup-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+}
+
+.floater-btn {
+  position: absolute;
+  left: var(--floater-x);
+  top: var(--floater-y);
+  transform: translate(-50%, -50%);
+
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--primary-color) 55%, transparent);
+
+  display: grid;
+  place-items: center;
+
+  color: var(--primary-text-color);
+  background: color-mix(in srgb, var(--card-background-color) 76%, var(--primary-color) 24%);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.floater-btn.on {
+  border-color: color-mix(in srgb, var(--floater-accent, var(--primary-color)) 70%, transparent);
+  background: color-mix(in srgb, var(--card-background-color) 30%, var(--floater-accent, var(--primary-color)) 70%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--floater-accent, var(--primary-color)) 55%, transparent),
+    0 10px 24px rgba(0, 0, 0, 0.38);
+}
+
+.floater-btn.active {
+  border-color: color-mix(in srgb, var(--primary-color) 80%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color) 30%, transparent),
+    0 10px 24px rgba(0, 0, 0, 0.35);
+}
+
+.floater-btn.active.on {
+  border-color: color-mix(in srgb, var(--floater-accent, var(--primary-color)) 85%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--floater-accent, var(--primary-color)) 35%, transparent),
+    0 12px 26px rgba(0, 0, 0, 0.4);
+}
+
+.floater-btn .floater-icon {
+  --mdc-icon-size: 20px;
+}
+
+.floater-popup {
+  position: absolute;
+  left: clamp(12px, var(--popup-x), calc(100% - 12px));
+  top: clamp(12px, var(--popup-y), calc(100% - 12px));
+  transform: translate(-50%, var(--popup-shift-y));
+
+  min-width: 230px;
+  max-width: min(320px, calc(100% - 24px));
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--divider-color) 70%, transparent);
+  background: color-mix(in srgb, var(--card-background-color) 93%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+  z-index: 4;
+}
+
+.floater-popup .close-btn {
+  float: right;
+  border: 0;
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--secondary-text-color);
+  background: color-mix(in srgb, var(--secondary-background-color) 70%, transparent);
+}
+
+.floater-popup .floater-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.floater-popup .floater-icon {
+  --mdc-icon-size: 20px;
+}
+
+.floater-popup .name {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.floater-popup .entity {
+  font-size: 11px;
+  opacity: 0.75;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.floater-popup .state {
+  font-size: 13px;
+  margin-bottom: 10px;
+  color: var(--secondary-text-color);
+}
+
+.floater-popup .actions {
+  display: grid;
+  gap: 8px;
+}
+
+.floater-popup .action-btn {
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--primary-color) 45%, transparent);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  color: var(--primary-text-color);
+  background: color-mix(in srgb, var(--primary-color) 16%, transparent);
+}
+
+.floater-popup .action-btn.secondary {
+  border-color: color-mix(in srgb, var(--divider-color) 75%, transparent);
+  background: color-mix(in srgb, var(--secondary-background-color) 75%, transparent);
+}
+
+.floater-popup .action-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .room-popup-layer {
   position: absolute;
   inset: 0;
-  z-index: 3;
+  z-index: 6;
 }
 
 .room-popup {

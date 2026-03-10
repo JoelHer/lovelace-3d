@@ -10,8 +10,10 @@ The codebase is now split by responsibility so new features can be added without
   UI orchestration only: mounts Three.js, opens/closes popup, runs selected action.
 - `src/features/rooms/*`
   Pure domain logic for room parsing, action parsing, templating, and room signatures.
+- `src/features/floaters/*`
+  Floater parsing and behavior helpers (`toggle` vs `more-info` action models).
 - `src/composables/useThreeFloorplan.ts`
-  Three.js lifecycle orchestration (mount/update/unmount) with isolated helper modules.
+  Three.js lifecycle orchestration (mount/update/unmount) with isolated helper modules and 3D-to-2D projection.
 - `src/three/roomMeshes.ts`
   Floor mesh/group creation and mesh geometry disposal.
 - `src/three/walls.ts`
@@ -45,6 +47,13 @@ rooms:
       - [4, 0]
       - [4, 3]
       - [0, 3]
+floaters:
+  - id: kitchen-light
+    entity: light.kitchen
+    icon: mdi:lightbulb
+    position: [2, 1.2, 1.5] # x, y, z in the same world-space as room polygons
+    tap_action: toggle # toggle | more-info | popup
+    hold_action: popup # toggle | more-info | popup
 ```
 
 Supported template tokens in popup actions:
@@ -63,9 +72,11 @@ Supported template tokens in popup actions:
    edit `src/features/rooms/actionTemplates.ts`.
 3. New 3D visuals (floor/walls/material effects):
    edit `src/three/roomMeshes.ts` and `src/three/walls.ts`.
-4. New UI behaviors:
+4. New floating 3D-anchored controls:
+   edit `src/features/floaters/config.ts` and `src/components/Floater*.vue`.
+5. New UI behaviors:
    edit `src/App.vue` and presentational components under `src/components`.
-5. New Lovelace editor fields:
+6. New Lovelace editor fields:
    edit `src/lovelace-3d-editor.ts`.
 
 ## Development

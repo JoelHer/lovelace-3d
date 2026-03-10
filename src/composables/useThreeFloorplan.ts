@@ -31,6 +31,12 @@ export type RoomClickEvent = {
   worldZ: number;
 };
 
+export type ProjectedPoint = {
+  x: number;
+  y: number;
+  visible: boolean;
+};
+
 type MountOptions = {
   onRoomClick?: (event: RoomClickEvent) => void;
 };
@@ -38,6 +44,7 @@ type MountOptions = {
 type UseThreeFloorplan = {
   mount(el: HTMLElement, rooms: Room[], options?: MountOptions): void;
   updateRooms(rooms: Room[]): void;
+  projectWorldPoint(worldX: number, worldY: number, worldZ: number): ProjectedPoint | null;
   isMounted(): boolean;
   unmount(): void;
 };
@@ -67,6 +74,8 @@ type FloorplanState = {
 };
 
 const CLICK_MOVE_TOLERANCE_PX = 6;
+const projectedWorldPoint = new Vector3();
+const cameraSpacePoint = new Vector3();
 
 function createCamera(): PerspectiveCamera {
   const camera = new PerspectiveCamera(50, 1, 0.1, 100);
@@ -323,6 +332,33 @@ function cleanupState(state: FloorplanState): void {
   state.mounted = false;
 }
 
+function projectWorldPoint(
+  state: FloorplanState,
+  worldX: number,
+  worldY: number,
+  worldZ: number
+): ProjectedPoint | null {
+  if (!state.renderer || !state.camera) return null;
+
+  const rect = state.renderer.domElement.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return null;
+
+  projectedWorldPoint.set(worldX, worldY, worldZ);
+  cameraSpacePoint.copy(projectedWorldPoint).applyMatrix4(state.camera.matrixWorldInverse);
+  projectedWorldPoint.project(state.camera);
+
+  const x = ((projectedWorldPoint.x + 1) / 2) * rect.width;
+  const y = ((-projectedWorldPoint.y + 1) / 2) * rect.height;
+  const visible =
+    cameraSpacePoint.z < 0 &&
+    projectedWorldPoint.x >= -1 &&
+    projectedWorldPoint.x <= 1 &&
+    projectedWorldPoint.y >= -1 &&
+    projectedWorldPoint.y <= 1;
+
+  return { x, y, visible };
+}
+
 export function useThreeFloorplan(): UseThreeFloorplan {
   const state: FloorplanState = {
     renderer: null,
@@ -380,6 +416,7 @@ export function useThreeFloorplan(): UseThreeFloorplan {
   return {
     mount,
     updateRooms,
+    projectWorldPoint: (worldX, worldY, worldZ) => projectWorldPoint(state, worldX, worldY, worldZ),
     isMounted: () => state.mounted,
     unmount,
   };

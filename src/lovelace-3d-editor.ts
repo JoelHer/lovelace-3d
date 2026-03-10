@@ -6,6 +6,7 @@ import type { LovelaceConfig } from "./types/lovelace";
 const EDITOR_TAG = "lovelace-3d-editor";
 const CARD_TYPE = "custom:lovelace-3d";
 const ROOMS_KEY = "rooms";
+const FLOATERS_KEY = "floaters";
 const ACTIONS_KEY = "room_popup_actions";
 const LEGACY_ACTIONS_KEY = "room_actions";
 
@@ -13,16 +14,20 @@ class Lovelace3DEditor extends LitElement {
   public hass: HassLike | null = null;
   private _config: LovelaceConfig = {};
   private _roomsYaml = "";
+  private _floatersYaml = "";
   private _actionsYaml = "";
   private _roomsError = "";
+  private _floatersError = "";
   private _actionsError = "";
 
   static properties = {
     hass: { attribute: false },
     _config: { state: true },
     _roomsYaml: { state: true },
+    _floatersYaml: { state: true },
     _actionsYaml: { state: true },
     _roomsError: { state: true },
+    _floatersError: { state: true },
     _actionsError: { state: true },
   };
 
@@ -95,8 +100,10 @@ class Lovelace3DEditor extends LitElement {
   public setConfig(config: LovelaceConfig) {
     this._config = { ...(config ?? {}) };
     this._roomsYaml = this._toYamlArray(this._config[ROOMS_KEY]);
+    this._floatersYaml = this._toYamlArray(this._config[FLOATERS_KEY]);
     this._actionsYaml = this._toYamlArray(this._config[ACTIONS_KEY] ?? this._config[LEGACY_ACTIONS_KEY]);
     this._roomsError = "";
+    this._floatersError = "";
     this._actionsError = "";
   }
 
@@ -104,6 +111,7 @@ class Lovelace3DEditor extends LitElement {
     if (!this.hass) return nothing;
 
     const roomsPreview = this._safeParseYamlArray(this._roomsYaml);
+    const floatersPreview = this._safeParseYamlArray(this._floatersYaml);
 
     return html`
       <div class="editor">
@@ -137,6 +145,24 @@ class Lovelace3DEditor extends LitElement {
         </ha-expansion-panel>
 
         <ha-expansion-panel outlined>
+          <h4 slot="header">Floaters YAML</h4>
+          <div class="panel-content">
+            <ha-code-editor
+              .hass=${this.hass}
+              .mode=${"yaml"}
+              .value=${this._floatersYaml}
+              @value-changed=${this._floatersYamlChanged}
+            ></ha-code-editor>
+            <div class="help">
+              Configure 2D floating buttons anchored to 3D points. Each item needs <code>entity</code> and
+              <code>position: [x, y, z]</code>. Use <code>tap_action</code>/<code>hold_action</code>:
+              <code>toggle</code>, <code>more-info</code>, or <code>popup</code>.
+            </div>
+            ${this._floatersError ? html`<div class="error">${this._floatersError}</div>` : nothing}
+          </div>
+        </ha-expansion-panel>
+
+        <ha-expansion-panel outlined>
           <h4 slot="header">Default Popup Actions YAML</h4>
           <div class="panel-content">
             <ha-code-editor
@@ -158,6 +184,15 @@ class Lovelace3DEditor extends LitElement {
             ${roomsPreview.length === 0
               ? html`<li class="preview-row"><span>No rooms configured.</span></li>`
               : roomsPreview.map((room, index) => this._renderRoomPreviewRow(room, index))}
+          </ul>
+        </div>
+
+        <div class="preview">
+          <div class="preview-title">Floaters Preview</div>
+          <ul class="preview-list">
+            ${floatersPreview.length === 0
+              ? html`<li class="preview-row"><span>No floaters configured.</span></li>`
+              : floatersPreview.map((floater, index) => this._renderFloaterPreviewRow(floater, index))}
           </ul>
         </div>
       </div>
@@ -194,6 +229,24 @@ class Lovelace3DEditor extends LitElement {
     }
   }
 
+  private _renderFloaterPreviewRow(floater: unknown, index: number) {
+    const floaterObj =
+      floater && typeof floater === "object"
+        ? (floater as Record<string, unknown>)
+        : ({} as Record<string, unknown>);
+    const entityId = String(floaterObj.entity ?? floaterObj.entity_id ?? `entity_${index + 1}`);
+    const label = String(floaterObj.label ?? floaterObj.name ?? entityId);
+    const tapAction = String(floaterObj.tap_action ?? floaterObj.press_action ?? "toggle");
+    const holdAction = String(floaterObj.hold_action ?? floaterObj.long_press_action ?? "popup");
+
+    return html`
+      <li class="preview-row">
+        <span>${label}</span>
+        <span class="preview-meta">${entityId} - tap:${tapAction} hold:${holdAction}</span>
+      </li>
+    `;
+  }
+
   private _computeLabel = (schema: { name?: string }) => {
     if (schema.name === "entity") return "Entity";
     return schema.name ?? "";
@@ -211,12 +264,17 @@ class Lovelace3DEditor extends LitElement {
     this._updateYamlField("rooms", String(ev.detail?.value ?? ""));
   };
 
+  private _floatersYamlChanged = (ev: CustomEvent) => {
+    this._updateYamlField("floaters", String(ev.detail?.value ?? ""));
+  };
+
   private _actionsYamlChanged = (ev: CustomEvent) => {
     this._updateYamlField("actions", String(ev.detail?.value ?? ""));
   };
 
-  private _updateYamlField(field: "rooms" | "actions", nextValue: string) {
+  private _updateYamlField(field: "rooms" | "floaters" | "actions", nextValue: string) {
     if (field === "rooms") this._roomsYaml = nextValue;
+    else if (field === "floaters") this._floatersYaml = nextValue;
     else this._actionsYaml = nextValue;
     this._emitConfigFromYaml();
   }
@@ -225,12 +283,16 @@ class Lovelace3DEditor extends LitElement {
     const nextConfig: LovelaceConfig = this._createBaseConfig();
 
     const rooms = this._parseYamlArraySafe(this._roomsYaml, "Rooms", "_roomsError");
+    const floaters = this._parseYamlArraySafe(this._floatersYaml, "Floaters", "_floatersError");
     const actions = this._parseYamlArraySafe(this._actionsYaml, "Default popup actions", "_actionsError");
 
-    if (!rooms || !actions) return;
+    if (!rooms || !floaters || !actions) return;
 
     if (rooms.length > 0) nextConfig[ROOMS_KEY] = rooms;
     else delete nextConfig[ROOMS_KEY];
+
+    if (floaters.length > 0) nextConfig[FLOATERS_KEY] = floaters;
+    else delete nextConfig[FLOATERS_KEY];
 
     if (actions.length > 0) nextConfig[ACTIONS_KEY] = actions;
     else delete nextConfig[ACTIONS_KEY];
@@ -242,7 +304,7 @@ class Lovelace3DEditor extends LitElement {
   private _parseYamlArraySafe(
     yamlText: string,
     label: string,
-    errorField: "_roomsError" | "_actionsError"
+    errorField: "_roomsError" | "_floatersError" | "_actionsError"
   ): unknown[] | null {
     try {
       const parsed = this._parseYamlArray(yamlText, label);
