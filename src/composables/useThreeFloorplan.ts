@@ -50,7 +50,6 @@ const WALL_BASE_OFFSET = 0.02;
 const BOTTOM_ALPHA = 0.9;
 const TOP_ALPHA = 0.2;
 const MERGE_SCALE = 100; // 1 / scale == merge tolerance (0.01)
-const FRONT_WALL_HIDE_THRESHOLD = 0.02;
 const CLICK_MOVE_TOLERANCE_PX = 6;
 
 const roundKey = (v: number) => (Math.round(v * MERGE_SCALE) / MERGE_SCALE).toFixed(2);
@@ -193,8 +192,6 @@ export function useThreeFloorplan(): UseThreeFloorplan {
   let pointerDownHandler: ((e: PointerEvent) => void) | null = null;
   let pointerUpHandler: ((e: PointerEvent) => void) | null = null;
   let pointerCancelHandler: (() => void) | null = null;
-  const cameraSide = new Vector2();
-  const wallSide = new Vector2();
   const handleResize = (el?: HTMLElement) => {
     if (!renderer || !camera || !el) return;
     const rect = el.getBoundingClientRect();
@@ -210,25 +207,7 @@ export function useThreeFloorplan(): UseThreeFloorplan {
     camera.updateProjectionMatrix();
   };
 
-  const updateFrontWallVisibility = () => {
-    if (!wallGroup || !camera || !controls) return;
 
-    const target = controls.target;
-    cameraSide.set(camera.position.x - target.x, camera.position.z - target.z);
-    if (cameraSide.lengthSq() < 1e-6) {
-      wallGroup.traverse((obj) => {
-        if (obj instanceof Mesh) obj.visible = true;
-      });
-      return;
-    }
-
-    wallGroup.traverse((obj) => {
-      if (!(obj instanceof Mesh)) return;
-      wallSide.set(obj.position.x - target.x, obj.position.z - target.z);
-      const side = wallSide.dot(cameraSide);
-      obj.visible = side <= FRONT_WALL_HIDE_THRESHOLD;
-    });
-  };
 
   const animate = () => {
     if (!renderer || !scene || !camera) return;
@@ -240,7 +219,7 @@ export function useThreeFloorplan(): UseThreeFloorplan {
       }
     }
     controls?.update();
-    updateFrontWallVisibility();
+    //updateFrontWallVisibility();
     renderer.render(scene, camera);
     frameId = window.requestAnimationFrame(animate);
   };
