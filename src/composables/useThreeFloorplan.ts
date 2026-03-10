@@ -1,27 +1,25 @@
 import { onBeforeUnmount } from "vue";
 import {
   AmbientLight,
-  BufferAttribute,
-  BoxGeometry,
   DirectionalLight,
   GridHelper,
   Group,
+  MOUSE,
   Mesh,
   PerspectiveCamera,
-  Scene,
-  WebGLRenderer,
-  MeshStandardMaterial,
-  MOUSE,
-  TOUCH,
   Raycaster,
+  Scene,
+  TOUCH,
   Vector2,
   Vector3,
-  DoubleSide,
+  WebGLRenderer,
+  MeshStandardMaterial,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
-import type { Room, Vec2XZ } from "../three/types";
-import { makeRoomFloorMesh } from "../three/floorplan";
+import { createFloorMaterial, createRoomFloorGroup, disposeMeshGeometries } from "../three/roomMeshes";
+import { createWallGroup, syncWallMaterialViewDirection, type ViewDirectionUniform } from "../three/walls";
+import type { Room } from "../three/types";
 
 export type RoomClickEvent = {
   roomId: string;
@@ -44,473 +42,345 @@ type UseThreeFloorplan = {
   unmount(): void;
 };
 
-const WALL_HEIGHT = 2.6;
-const WALL_THICKNESS = 0.08;
-const WALL_BASE_OFFSET = 0.02;
-const BOTTOM_ALPHA = 0.9;
-const TOP_ALPHA = 0.2;
-const MERGE_SCALE = 100; // 1 / scale == merge tolerance (0.01)
+type PointerStartState = {
+  pointerId: number;
+  clientX: number;
+  clientY: number;
+  button: number;
+  isPrimary: boolean;
+};
+
+type FloorplanState = {
+  renderer: WebGLRenderer | null;
+  camera: PerspectiveCamera | null;
+  scene: Scene | null;
+  controls: OrbitControls | null;
+  frameId: number | null;
+  resizeObserver: ResizeObserver | null;
+  mounted: boolean;
+  floorGroup: Group | null;
+  floorMaterial: MeshStandardMaterial | null;
+  wallGroup: Group | null;
+  wallMaterial: MeshStandardMaterial | null;
+  pointerCleanup: (() => void) | null;
+  viewDirUniform: ViewDirectionUniform;
+};
+
 const CLICK_MOVE_TOLERANCE_PX = 6;
 
-const roundKey = (v: number) => (Math.round(v * MERGE_SCALE) / MERGE_SCALE).toFixed(2);
-
-function canonicalEdgeKey(a: Vec2XZ, b: Vec2XZ) {
-  const aKey = `${roundKey(a[0])},${roundKey(a[1])}`;
-  const bKey = `${roundKey(b[0])},${roundKey(b[1])}`;
-  return aKey < bKey ? `${aKey}|${bKey}` : `${bKey}|${aKey}`;
+function createCamera(): PerspectiveCamera {
+  const camera = new PerspectiveCamera(50, 1, 0.1, 100);
+  camera.position.set(3, 6, 10);
+  camera.lookAt(3, 0, 2.5);
+  return camera;
 }
 
-function makeWallMesh(
-  a: Vec2XZ,
-  b: Vec2XZ,
-  height: number,
-  thickness: number,
-  material: MeshStandardMaterial
-) {
-  const dir = new Vector3(b[0] - a[0], 0, b[1] - a[1]);
-  const length = dir.length();
-  if (!Number.isFinite(length) || length <= 0.001) return null;
+function createRenderer(container: HTMLElement): WebGLRenderer {
+  const renderer = new WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.domElement.style.width = "100%";
+  renderer.domElement.style.height = "100%";
+  renderer.domElement.style.display = "block";
+  container.appendChild(renderer.domElement);
+  return renderer;
+}
 
-  const adjustedLength = Math.max(0.01, length - thickness * 1.4); // inset ends to avoid corner overlap
-  const geometry = new BoxGeometry(adjustedLength, height, thickness);
-  const posAttr = geometry.getAttribute("position") as BufferAttribute;
-  const opacity = new Float32Array(posAttr.count);
-  for (let i = 0; i < posAttr.count; i++) {
-    const y = posAttr.getY(i);
-    const t = (y + height / 2) / height;
-    opacity[i] = BOTTOM_ALPHA + (TOP_ALPHA - BOTTOM_ALPHA) * t;
+function createControls(camera: PerspectiveCamera, renderer: WebGLRenderer): OrbitControls {
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.set(3, 0, 2.5);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.enableZoom = true;
+  controls.mouseButtons = {
+    LEFT: MOUSE.ROTATE,
+    MIDDLE: MOUSE.ROTATE,
+    RIGHT: MOUSE.PAN,
+  };
+  controls.touches = {
+    ONE: TOUCH.ROTATE,
+    TWO: TOUCH.PAN,
+  };
+  controls.update();
+  return controls;
+}
+
+function addSceneDecorations(scene: Scene): void {
+  scene.add(new GridHelper(100, 100, 0x888888, 0x444444));
+
+  const keyLight = new DirectionalLight(0xffffff, 1.05);
+  keyLight.position.set(4, 6, 5);
+
+  const fillLight = new DirectionalLight(0x88b4ff, 0.5);
+  fillLight.position.set(-3, -2, -4);
+
+  const ambient = new AmbientLight(0xffffff, 0.25);
+
+  scene.add(keyLight, fillLight, ambient);
+}
+
+function resizeRenderer(renderer: WebGLRenderer, camera: PerspectiveCamera, container: HTMLElement): void {
+  const rect = container.getBoundingClientRect();
+  const width = Math.max(1, Math.round(rect.width) || container.clientWidth || 300);
+  const fallbackHeight = Math.round(width * 0.625);
+  const height =
+    Math.max(1, Math.round(rect.height)) ||
+    Math.max(1, container.clientHeight) ||
+    Math.max(1, fallbackHeight);
+
+  renderer.setSize(width, height, false);
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+}
+
+function replaceFloorGroup(state: FloorplanState, rooms: ReadonlyArray<Room>): void {
+  if (!state.scene) return;
+
+  if (state.floorGroup) {
+    state.scene.remove(state.floorGroup);
+    disposeMeshGeometries(state.floorGroup);
   }
-  geometry.setAttribute("opacity", new BufferAttribute(opacity, 1));
 
-  const mesh = new Mesh(geometry, material);
-  const angle = -Math.atan2(dir.z, dir.x);
-  mesh.rotation.y = angle;
-  mesh.position.set((a[0] + b[0]) / 2, height / 2 + WALL_BASE_OFFSET, (a[1] + b[1]) / 2);
-
-  return mesh;
+  const floorMaterial = state.floorMaterial ?? createFloorMaterial();
+  state.floorMaterial = floorMaterial;
+  state.floorGroup = createRoomFloorGroup(rooms, floorMaterial);
+  state.scene.add(state.floorGroup);
 }
 
-function createWallMaterial(viewDirUniform: { value: Vector3 }) {
-  const material = new MeshStandardMaterial({
-    color: 0xffffff,
-    roughness: 0.35,
-    metalness: 0,
-    transparent: true,
-    depthWrite: false,
-    polygonOffset: true,
-    polygonOffsetFactor: 1,
-    polygonOffsetUnits: 1,
-    side: DoubleSide,
+function replaceWallGroup(state: FloorplanState, rooms: ReadonlyArray<Room>): void {
+  if (!state.scene) return;
+
+  if (state.wallGroup) {
+    state.scene.remove(state.wallGroup);
+    disposeMeshGeometries(state.wallGroup);
+  }
+
+  const walls = createWallGroup(rooms, state.viewDirUniform, state.wallMaterial ?? undefined);
+  state.wallGroup = walls.group;
+  state.wallMaterial = walls.material;
+  state.scene.add(state.wallGroup);
+}
+
+function replaceRooms(state: FloorplanState, rooms: ReadonlyArray<Room>): void {
+  replaceFloorGroup(state, rooms);
+  replaceWallGroup(state, rooms);
+}
+
+function pickRoomAtPointer(
+  state: FloorplanState,
+  raycaster: Raycaster,
+  mouse: Vector2,
+  clientX: number,
+  clientY: number
+): RoomClickEvent | null {
+  if (!state.renderer || !state.camera || !state.floorGroup) return null;
+
+  const rect = state.renderer.domElement.getBoundingClientRect();
+  const localX = clientX - rect.left;
+  const localY = clientY - rect.top;
+  if (localX < 0 || localY < 0 || localX > rect.width || localY > rect.height) return null;
+
+  mouse.x = (localX / rect.width) * 2 - 1;
+  mouse.y = -((localY / rect.height) * 2 - 1);
+  raycaster.setFromCamera(mouse, state.camera);
+
+  const floorMeshes: Mesh[] = [];
+  state.floorGroup.traverse((obj) => {
+    if (obj instanceof Mesh) {
+      floorMeshes.push(obj);
+    }
   });
 
-  material.onBeforeCompile = (shader) => {
-    shader.uniforms.uViewDir = viewDirUniform;
+  const hit = raycaster.intersectObjects(floorMeshes, true)[0];
+  if (!hit) return null;
 
-    shader.vertexShader = shader.vertexShader
-      .replace(
-        "#include <common>",
-        `#include <common>
-attribute float opacity;
-varying float vOpacity;
-varying vec3 vWorldPos;`
-      )
-      .replace(
-        "#include <begin_vertex>",
-        `#include <begin_vertex>
-vOpacity = opacity;
-vWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`
-      );
-
-    shader.fragmentShader = shader.fragmentShader
-      .replace(
-        "#include <common>",
-        `#include <common>
-uniform vec3 uViewDir;
-varying float vOpacity;
-varying vec3 vWorldPos;`
-      )
-      .replace(
-        "#include <dithering_fragment>",
-        `#include <dithering_fragment>
-float alignment = dot(normalize(vWorldPos - cameraPosition), normalize(uViewDir));
-float centerFade = smoothstep(0.35, 0.95, alignment);
-float finalAlpha = vOpacity * (1.0 - 0.9 * centerFade);
-gl_FragColor.a *= finalAlpha;`
-      );
-
-    material.userData.shader = shader;
+  const hitObject = hit.object as Mesh;
+  return {
+    roomId: String(hitObject.userData.roomId ?? ""),
+    roomName: String(hitObject.userData.roomName ?? ""),
+    x: localX,
+    y: localY,
+    worldX: hit.point.x,
+    worldY: hit.point.y,
+    worldZ: hit.point.z,
   };
-
-  return material;
 }
 
-function makeWalls(
-  rooms: Room[],
-  viewDirUniform: { value: Vector3 },
-  material?: MeshStandardMaterial
-) {
-  const mat = material ?? createWallMaterial(viewDirUniform);
-  const group = new Group();
+function installPointerHandlers(
+  state: FloorplanState,
+  onRoomClick?: (event: RoomClickEvent) => void
+): (() => void) | null {
+  if (!state.renderer) return null;
 
-  const edges = new Map<string, { a: Vec2XZ; b: Vec2XZ }>();
-  for (const room of rooms) {
-    const poly = room.polygon;
-    if (!Array.isArray(poly) || poly.length < 2) continue;
+  const raycaster = new Raycaster();
+  const mouse = new Vector2();
+  let pointerStart: PointerStartState | null = null;
 
-    for (let i = 0; i < poly.length; i++) {
-      const a = poly[i];
-      const b = poly[(i + 1) % poly.length];
-      if (!a || !b) continue;
-      const key = canonicalEdgeKey(a, b);
-      if (!edges.has(key)) edges.set(key, { a, b });
+  const onPointerDown = (event: PointerEvent) => {
+    if (!event.isPrimary) return;
+    pointerStart = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      button: event.button,
+      isPrimary: event.isPrimary,
+    };
+  };
+
+  const onPointerUp = (event: PointerEvent) => {
+    if (!pointerStart) return;
+
+    const start = pointerStart;
+    pointerStart = null;
+
+    if (!event.isPrimary || !start.isPrimary) return;
+    if (event.pointerId !== start.pointerId) return;
+    if (event.pointerType === "mouse" && (start.button !== 0 || event.button !== 0)) return;
+
+    const dx = event.clientX - start.clientX;
+    const dy = event.clientY - start.clientY;
+    if (dx * dx + dy * dy > CLICK_MOVE_TOLERANCE_PX * CLICK_MOVE_TOLERANCE_PX) return;
+
+    const roomEvent = pickRoomAtPointer(state, raycaster, mouse, event.clientX, event.clientY);
+    if (roomEvent) {
+      onRoomClick?.(roomEvent);
+    }
+  };
+
+  const clearPointerState = () => {
+    pointerStart = null;
+  };
+
+  const domElement = state.renderer.domElement;
+  domElement.addEventListener("pointerdown", onPointerDown);
+  domElement.addEventListener("pointerup", onPointerUp);
+  domElement.addEventListener("pointercancel", clearPointerState);
+
+  return () => {
+    domElement.removeEventListener("pointerdown", onPointerDown);
+    domElement.removeEventListener("pointerup", onPointerUp);
+    domElement.removeEventListener("pointercancel", clearPointerState);
+  };
+}
+
+function stopAnimation(state: FloorplanState): void {
+  if (state.frameId !== null) {
+    window.cancelAnimationFrame(state.frameId);
+    state.frameId = null;
+  }
+}
+
+function renderFrame(state: FloorplanState): void {
+  if (!state.renderer || !state.scene || !state.camera) return;
+
+  if (state.wallMaterial) {
+    state.viewDirUniform.value.set(0, 0, -1).applyQuaternion(state.camera.quaternion).normalize();
+    syncWallMaterialViewDirection(state.wallMaterial, state.viewDirUniform.value);
+  }
+
+  state.controls?.update();
+  state.renderer.render(state.scene, state.camera);
+  state.frameId = window.requestAnimationFrame(() => renderFrame(state));
+}
+
+function cleanupState(state: FloorplanState): void {
+  stopAnimation(state);
+
+  state.resizeObserver?.disconnect();
+  state.resizeObserver = null;
+
+  state.pointerCleanup?.();
+  state.pointerCleanup = null;
+
+  state.controls?.dispose();
+  state.controls = null;
+
+  if (state.floorGroup) {
+    disposeMeshGeometries(state.floorGroup);
+    state.floorGroup = null;
+  }
+
+  state.floorMaterial?.dispose();
+  state.floorMaterial = null;
+
+  if (state.wallGroup) {
+    disposeMeshGeometries(state.wallGroup);
+    state.wallGroup = null;
+  }
+
+  state.wallMaterial?.dispose();
+  state.wallMaterial = null;
+
+  if (state.renderer) {
+    state.renderer.dispose();
+    if (state.renderer.domElement.parentNode) {
+      state.renderer.domElement.parentNode.removeChild(state.renderer.domElement);
     }
   }
 
-  for (const edge of edges.values()) {
-    const mesh = makeWallMesh(edge.a, edge.b, WALL_HEIGHT, WALL_THICKNESS, mat);
-    if (mesh) group.add(mesh);
-  }
-
-  return { group, material: mat };
+  state.renderer = null;
+  state.camera = null;
+  state.scene = null;
+  state.mounted = false;
 }
 
 export function useThreeFloorplan(): UseThreeFloorplan {
-  let renderer: WebGLRenderer | null = null;
-  let camera: PerspectiveCamera | null = null;
-  let scene: Scene | null = null;
-  let controls: OrbitControls | null = null;
-
-  let frameId: number | null = null;
-  let resizeObserver: ResizeObserver | null = null;
-  let mounted = false;
-
-  let floorGroup: Group | null = null;
-  let floorMat: MeshStandardMaterial | null = null;
-  let wallGroup: Group | null = null;
-  let wallMat: MeshStandardMaterial | null = null;
-  const viewDirUniform = { value: new Vector3(0, 0, -1) };
-  let pointerDownHandler: ((e: PointerEvent) => void) | null = null;
-  let pointerUpHandler: ((e: PointerEvent) => void) | null = null;
-  let pointerCancelHandler: (() => void) | null = null;
-  const handleResize = (el?: HTMLElement) => {
-    if (!renderer || !camera || !el) return;
-    const rect = el.getBoundingClientRect();
-    const width = Math.max(1, Math.round(rect.width) || el.clientWidth || 300);
-    const fallbackHeight = Math.round(width * 0.625);
-    const height =
-      Math.max(1, Math.round(rect.height)) ||
-      Math.max(1, el.clientHeight) ||
-      Math.max(1, fallbackHeight);
-
-    renderer.setSize(width, height, false);
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
+  const state: FloorplanState = {
+    renderer: null,
+    camera: null,
+    scene: null,
+    controls: null,
+    frameId: null,
+    resizeObserver: null,
+    mounted: false,
+    floorGroup: null,
+    floorMaterial: null,
+    wallGroup: null,
+    wallMaterial: null,
+    pointerCleanup: null,
+    viewDirUniform: { value: new Vector3(0, 0, -1) },
   };
 
-
-
-  const animate = () => {
-    if (!renderer || !scene || !camera) return;
-    if (wallMat) {
-      viewDirUniform.value.set(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
-      const shader = wallMat.userData.shader;
-      if (shader?.uniforms?.uViewDir) {
-        shader.uniforms.uViewDir.value.copy(viewDirUniform.value);
-      }
+  const mount = (container: HTMLElement, rooms: Room[], options?: MountOptions): void => {
+    if (state.mounted) {
+      cleanupState(state);
     }
-    controls?.update();
-    //updateFrontWallVisibility();
-    renderer.render(scene, camera);
-    frameId = window.requestAnimationFrame(animate);
-  };
 
-  const mount = (el: HTMLElement, rooms: Room[], options?: MountOptions) => {
-    // Scene
-    scene = new Scene();
+    state.scene = new Scene();
+    state.camera = createCamera();
+    state.renderer = createRenderer(container);
+    state.controls = createControls(state.camera, state.renderer);
 
-    // Camera
-    camera = new PerspectiveCamera(50, 1, 0.1, 100);
-    camera.position.set(3, 6, 10);
-    camera.lookAt(3, 0, 2.5);
+    addSceneDecorations(state.scene);
+    replaceRooms(state, rooms);
 
-    // Renderer
-    renderer = new WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.domElement.style.width = "100%";
-    renderer.domElement.style.height = "100%";
-    renderer.domElement.style.display = "block";
-    el.appendChild(renderer.domElement);
-
-    // Controls (must be created before setting target)
-    controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.set(3, 0, 2.5);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.08;
-    controls.enableZoom = true;
-    controls.mouseButtons = {
-      LEFT: MOUSE.ROTATE,
-      MIDDLE: MOUSE.ROTATE,
-      RIGHT: MOUSE.PAN,
-    };
-    controls.touches = {
-      ONE: TOUCH.ROTATE,
-      TWO: TOUCH.PAN,
-    };
-    controls.update();
-
-    // Optional grid
-    const grid = new GridHelper(100, 100, 0x888888, 0x444444);
-    scene.add(grid);
-
-    // Floor material
-    floorMat = new MeshStandardMaterial({
-      roughness: 1,
-      metalness: 0,
-      side: DoubleSide,
+    resizeRenderer(state.renderer, state.camera, container);
+    state.resizeObserver = new ResizeObserver(() => {
+      if (!state.renderer || !state.camera) return;
+      resizeRenderer(state.renderer, state.camera, container);
     });
+    state.resizeObserver.observe(container);
 
-    // Build floors
-    floorGroup = new Group();
-    for (const room of rooms) {
-      const mesh = makeRoomFloorMesh(room.polygon, { y: 0, material: floorMat });
-      mesh.userData.roomId = room.id;
-      mesh.userData.roomName = room.name;
-      floorGroup.add(mesh);
-    }
-    scene.add(floorGroup);
+    state.pointerCleanup = installPointerHandlers(state, options?.onRoomClick);
 
-    const walls = makeWalls(rooms, viewDirUniform);
-    wallGroup = walls.group;
-    wallMat = walls.material;
-    scene.add(wallGroup);
-
-    // Lights
-    const keyLight = new DirectionalLight(0xffffff, 1.05);
-    keyLight.position.set(4, 6, 5);
-
-    const fillLight = new DirectionalLight(0x88b4ff, 0.5);
-    fillLight.position.set(-3, -2, -4);
-
-    const ambient = new AmbientLight(0xffffff, 0.25);
-
-    scene.add(keyLight, fillLight, ambient);
-
-    // Resize handling
-    handleResize(el);
-    resizeObserver = new ResizeObserver(() => handleResize(el));
-    resizeObserver.observe(el);
-
-    // Click detection (raycast rooms)
-    const raycaster = new Raycaster();
-    const mouse = new Vector2();
-    let pointerStart:
-      | {
-          pointerId: number;
-          clientX: number;
-          clientY: number;
-          button: number;
-          isPrimary: boolean;
-        }
-      | null = null;
-
-    const pickRoomAt = (clientX: number, clientY: number) => {
-      if (!renderer || !camera || !floorGroup) return;
-
-      const r = renderer.domElement.getBoundingClientRect();
-      const localX = clientX - r.left;
-      const localY = clientY - r.top;
-      if (localX < 0 || localY < 0 || localX > r.width || localY > r.height) return;
-      mouse.x = (localX / r.width) * 2 - 1;
-      mouse.y = -((localY / r.height) * 2 - 1);
-
-      raycaster.setFromCamera(mouse, camera);
-
-      // Collect all meshes in the floorGroup
-      const floorMeshes: Mesh[] = [];
-      floorGroup.traverse((obj) => {
-        if (obj instanceof Mesh) floorMeshes.push(obj);
-      });
-
-      const hits = raycaster.intersectObjects(floorMeshes, true);
-      const firstHit = hits[0];
-      if (!firstHit) return;
-
-      const hitObj = firstHit.object as Mesh;
-      return {
-        roomId: String(hitObj.userData.roomId ?? ""),
-        roomName: String(hitObj.userData.roomName ?? ""),
-        x: localX,
-        y: localY,
-        worldX: firstHit.point.x,
-        worldY: firstHit.point.y,
-        worldZ: firstHit.point.z,
-      } as RoomClickEvent;
-    };
-
-    const onPointerDown = (e: PointerEvent) => {
-      if (!e.isPrimary) return;
-      pointerStart = {
-        pointerId: e.pointerId,
-        clientX: e.clientX,
-        clientY: e.clientY,
-        button: e.button,
-        isPrimary: e.isPrimary,
-      };
-    };
-
-    const onPointerUp = (e: PointerEvent) => {
-      if (!pointerStart) return;
-      const start = pointerStart;
-      pointerStart = null;
-
-      if (!e.isPrimary || !start.isPrimary) return;
-      if (e.pointerId !== start.pointerId) return;
-      if (e.pointerType === "mouse" && (start.button !== 0 || e.button !== 0)) return;
-
-      const dx = e.clientX - start.clientX;
-      const dy = e.clientY - start.clientY;
-      if (dx * dx + dy * dy > CLICK_MOVE_TOLERANCE_PX * CLICK_MOVE_TOLERANCE_PX) return;
-
-      const roomEvent = pickRoomAt(e.clientX, e.clientY);
-      if (!roomEvent) return;
-      options?.onRoomClick?.(roomEvent);
-    };
-
-    const clearPointerStart = () => {
-      pointerStart = null;
-    };
-
-    renderer.domElement.addEventListener("pointerdown", onPointerDown);
-    renderer.domElement.addEventListener("pointerup", onPointerUp);
-    renderer.domElement.addEventListener("pointercancel", clearPointerStart);
-    pointerDownHandler = onPointerDown;
-    pointerUpHandler = onPointerUp;
-    pointerCancelHandler = clearPointerStart;
-
-    mounted = true;
-    // Start render loop
-    animate();
+    state.mounted = true;
+    renderFrame(state);
   };
 
-  const updateRooms = (rooms: Room[]) => {
-    if (!scene) return;
-
-    // Rebuild floors
-    if (floorGroup && scene) scene.remove(floorGroup);
-    if (floorGroup) {
-      floorGroup.traverse((obj) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const anyObj = obj as any;
-        if (anyObj.isMesh && anyObj.geometry) {
-          anyObj.geometry.dispose();
-        }
-      });
-    }
-    floorGroup = new Group();
-    const floorMaterial =
-      floorMat ??
-      new MeshStandardMaterial({
-        roughness: 1,
-        metalness: 0,
-        side: DoubleSide,
-      });
-    floorMat = floorMaterial;
-    for (const room of rooms) {
-      const mesh = makeRoomFloorMesh(room.polygon, { y: 0, material: floorMaterial });
-      mesh.userData.roomId = room.id;
-      mesh.userData.roomName = room.name;
-      floorGroup.add(mesh);
-    }
-    scene.add(floorGroup);
-
-    // Rebuild walls
-    if (wallGroup && scene) scene.remove(wallGroup);
-    if (wallGroup) {
-      wallGroup.traverse((obj) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const anyObj = obj as any;
-        if (anyObj.isMesh && anyObj.geometry) {
-          anyObj.geometry.dispose();
-        }
-      });
-    }
-    const walls = makeWalls(rooms, viewDirUniform, wallMat ?? undefined);
-    wallGroup = walls.group;
-    wallMat = walls.material;
-    scene.add(wallGroup);
+  const updateRooms = (rooms: Room[]): void => {
+    if (!state.scene) return;
+    replaceRooms(state, rooms);
   };
 
-  const unmount = () => {
-    if (frameId) {
-      window.cancelAnimationFrame(frameId);
-      frameId = null;
-    }
-
-    resizeObserver?.disconnect();
-    resizeObserver = null;
-
-    controls?.dispose();
-    controls = null;
-
-    if (renderer?.domElement) {
-      if (pointerDownHandler) {
-        renderer.domElement.removeEventListener("pointerdown", pointerDownHandler);
-        pointerDownHandler = null;
-      }
-      if (pointerUpHandler) {
-        renderer.domElement.removeEventListener("pointerup", pointerUpHandler);
-        pointerUpHandler = null;
-      }
-      if (pointerCancelHandler) {
-        renderer.domElement.removeEventListener("pointercancel", pointerCancelHandler);
-        pointerCancelHandler = null;
-      }
-    }
-
-    // Dispose room meshes geometry (materials shared)
-    if (floorGroup) {
-      floorGroup.traverse((obj) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const anyObj = obj as any;
-        if (anyObj.isMesh && anyObj.geometry) {
-          anyObj.geometry.dispose();
-        }
-      });
-      floorGroup = null;
-    }
-
-    floorMat?.dispose();
-    floorMat = null;
-
-    if (wallGroup) {
-      wallGroup.traverse((obj) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const anyObj = obj as any;
-        if (anyObj.isMesh && anyObj.geometry) {
-          anyObj.geometry.dispose();
-        }
-      });
-      wallGroup = null;
-    }
-
-    wallMat?.dispose();
-    wallMat = null;
-
-    if (renderer) {
-      renderer.dispose();
-      if (renderer.domElement.parentNode) {
-        renderer.domElement.parentNode.removeChild(renderer.domElement);
-      }
-    }
-
-    renderer = null;
-    camera = null;
-    scene = null;
-    mounted = false;
+  const unmount = (): void => {
+    cleanupState(state);
   };
 
-  // optional: auto cleanup if you call composable inside component
-  onBeforeUnmount(() => unmount());
+  onBeforeUnmount(unmount);
 
-  return { mount, updateRooms, isMounted: () => mounted, unmount };
+  return {
+    mount,
+    updateRooms,
+    isMounted: () => state.mounted,
+    unmount,
+  };
 }

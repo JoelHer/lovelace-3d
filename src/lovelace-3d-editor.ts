@@ -1,12 +1,16 @@
 import { dump, load } from "js-yaml";
 import { LitElement, css, html, nothing } from "lit";
-
-type LovelaceConfig = Record<string, any>;
+import type { HassLike } from "./types/homeAssistant";
+import type { LovelaceConfig } from "./types/lovelace";
 
 const EDITOR_TAG = "lovelace-3d-editor";
+const CARD_TYPE = "custom:lovelace-3d";
+const ROOMS_KEY = "rooms";
+const ACTIONS_KEY = "room_popup_actions";
+const LEGACY_ACTIONS_KEY = "room_actions";
 
 class Lovelace3DEditor extends LitElement {
-  public hass: any;
+  public hass: HassLike | null = null;
   private _config: LovelaceConfig = {};
   private _roomsYaml = "";
   private _actionsYaml = "";
@@ -90,8 +94,8 @@ class Lovelace3DEditor extends LitElement {
 
   public setConfig(config: LovelaceConfig) {
     this._config = { ...(config ?? {}) };
-    this._roomsYaml = this._toYamlArray(this._config.rooms);
-    this._actionsYaml = this._toYamlArray(this._config.room_popup_actions ?? this._config.room_actions);
+    this._roomsYaml = this._toYamlArray(this._config[ROOMS_KEY]);
+    this._actionsYaml = this._toYamlArray(this._config[ACTIONS_KEY] ?? this._config[LEGACY_ACTIONS_KEY]);
     this._roomsError = "";
     this._actionsError = "";
   }
@@ -197,58 +201,64 @@ class Lovelace3DEditor extends LitElement {
 
   private _entityChanged = (ev: CustomEvent) => {
     const nextEntity = ev.detail?.value?.entity ?? "";
-    const nextConfig: LovelaceConfig = {
-      ...this._config,
-      type: this._config.type ?? "custom:lovelace-3d",
-    };
+    const nextConfig: LovelaceConfig = this._createBaseConfig();
     if (nextEntity) nextConfig.entity = nextEntity;
     else delete nextConfig.entity;
     this._fireConfigChanged(nextConfig);
   };
 
   private _roomsYamlChanged = (ev: CustomEvent) => {
-    this._roomsYaml = String(ev.detail?.value ?? "");
-    this._emitConfigFromYaml();
+    this._updateYamlField("rooms", String(ev.detail?.value ?? ""));
   };
 
   private _actionsYamlChanged = (ev: CustomEvent) => {
-    this._actionsYaml = String(ev.detail?.value ?? "");
-    this._emitConfigFromYaml();
+    this._updateYamlField("actions", String(ev.detail?.value ?? ""));
   };
 
+  private _updateYamlField(field: "rooms" | "actions", nextValue: string) {
+    if (field === "rooms") this._roomsYaml = nextValue;
+    else this._actionsYaml = nextValue;
+    this._emitConfigFromYaml();
+  }
+
   private _emitConfigFromYaml() {
-    const nextConfig: LovelaceConfig = {
-      ...this._config,
-      type: this._config.type ?? "custom:lovelace-3d",
-    };
+    const nextConfig: LovelaceConfig = this._createBaseConfig();
 
-    let rooms: unknown[] = [];
-    let actions: unknown[] = [];
+    const rooms = this._parseYamlArraySafe(this._roomsYaml, "Rooms", "_roomsError");
+    const actions = this._parseYamlArraySafe(this._actionsYaml, "Default popup actions", "_actionsError");
 
-    try {
-      rooms = this._parseYamlArray(this._roomsYaml, "Rooms");
-      this._roomsError = "";
-    } catch (err) {
-      this._roomsError = err instanceof Error ? err.message : String(err);
-    }
+    if (!rooms || !actions) return;
 
-    try {
-      actions = this._parseYamlArray(this._actionsYaml, "Default popup actions");
-      this._actionsError = "";
-    } catch (err) {
-      this._actionsError = err instanceof Error ? err.message : String(err);
-    }
+    if (rooms.length > 0) nextConfig[ROOMS_KEY] = rooms;
+    else delete nextConfig[ROOMS_KEY];
 
-    if (this._roomsError || this._actionsError) return;
-
-    if (rooms.length > 0) nextConfig.rooms = rooms;
-    else delete nextConfig.rooms;
-
-    if (actions.length > 0) nextConfig.room_popup_actions = actions;
-    else delete nextConfig.room_popup_actions;
-    delete nextConfig.room_actions;
+    if (actions.length > 0) nextConfig[ACTIONS_KEY] = actions;
+    else delete nextConfig[ACTIONS_KEY];
+    delete nextConfig[LEGACY_ACTIONS_KEY];
 
     this._fireConfigChanged(nextConfig);
+  }
+
+  private _parseYamlArraySafe(
+    yamlText: string,
+    label: string,
+    errorField: "_roomsError" | "_actionsError"
+  ): unknown[] | null {
+    try {
+      const parsed = this._parseYamlArray(yamlText, label);
+      this[errorField] = "";
+      return parsed;
+    } catch (err) {
+      this[errorField] = err instanceof Error ? err.message : String(err);
+      return null;
+    }
+  }
+
+  private _createBaseConfig(): LovelaceConfig {
+    return {
+      ...this._config,
+      type: String(this._config.type ?? CARD_TYPE),
+    };
   }
 
   private _parseYamlArray(text: string, label: string): unknown[] {

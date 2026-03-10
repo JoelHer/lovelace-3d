@@ -1,16 +1,17 @@
 import { computed, ref, watch, type Ref } from "vue";
+import type { HassLike } from "../types/homeAssistant";
 
 export type AreaEntry = {
   area_id: string;
   name: string;
 };
 
-export function useAreaRegistry(hassRef: Ref<any | null>) {
+export function useAreaRegistry(hassRef: Ref<HassLike | null>) {
   const areas = ref<AreaEntry[]>([]);
   const error = ref<unknown>(null);
   const loading = ref(false);
   const loaded = ref(false);
-  let activeConnection: unknown = null;
+  let activeConnection: HassLike["connection"] | null = null;
 
   const areasById = computed<Record<string, AreaEntry>>(() => {
     const map: Record<string, AreaEntry> = {};
@@ -28,7 +29,7 @@ export function useAreaRegistry(hassRef: Ref<any | null>) {
     loading.value = true;
     try {
       error.value = null;
-      const res: AreaEntry[] = await hass.callWS({
+      const res = await hass.callWS<AreaEntry[]>({
         type: "config/area_registry/list",
       });
       areas.value = Array.isArray(res) ? res : [];

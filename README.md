@@ -1,5 +1,79 @@
-# Vue 3 + TypeScript + Vite
+# lovelace-3d
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+A Home Assistant custom Lovelace card that renders a 3D floorplan and room action popups.
 
-Learn more about the recommended Project Setup and IDE Support in the [Vue Docs TypeScript Guide](https://vuejs.org/guide/typescript/overview.html#project-setup).
+## What This Refactor Changed
+
+The codebase is now split by responsibility so new features can be added without touching unrelated files:
+
+- `src/App.vue`
+  UI orchestration only: mounts Three.js, opens/closes popup, runs selected action.
+- `src/features/rooms/*`
+  Pure domain logic for room parsing, action parsing, templating, and room signatures.
+- `src/composables/useThreeFloorplan.ts`
+  Three.js lifecycle orchestration (mount/update/unmount) with isolated helper modules.
+- `src/three/roomMeshes.ts`
+  Floor mesh/group creation and mesh geometry disposal.
+- `src/three/walls.ts`
+  Wall mesh generation, shared shader material creation, and camera-view uniform sync.
+- `src/types/*`
+  Shared app-level Home Assistant and Lovelace card types.
+
+## Project Structure
+
+- `src/lovelace-3d.ts`: custom element entrypoint and card registration.
+- `src/lovelace-3d-editor.ts`: Lovelace visual editor (YAML rooms/actions).
+- `src/composables/useAreaRegistry.ts`: loads and caches HA area registry.
+- `src/components/*`: presentational Vue components.
+- `src/three/*`: all Three.js geometry helpers and type definitions.
+
+## Card Config
+
+```yaml
+type: custom:lovelace-3d
+entity: sensor.temperature
+room_popup_actions:
+  - service: light.turn_on
+    label: Turn lights on
+    target:
+      area_id: "{{ room.area_id }}"
+rooms:
+  - area: kitchen
+    name: Kitchen
+    polygon:
+      - [0, 0]
+      - [4, 0]
+      - [4, 3]
+      - [0, 3]
+```
+
+Supported template tokens in popup actions:
+
+- `{{ room.id }}`
+- `{{ room.name }}`
+- `{{ room.area_id }}`
+- `{{ click.x }}`, `{{ click.y }}`
+- `{{ click.world_x }}`, `{{ click.world_y }}`, `{{ click.world_z }}`
+
+## Adding Features
+
+1. New room/action parsing behavior:
+   edit `src/features/rooms/roomConfig.ts`.
+2. New popup template tokens:
+   edit `src/features/rooms/actionTemplates.ts`.
+3. New 3D visuals (floor/walls/material effects):
+   edit `src/three/roomMeshes.ts` and `src/three/walls.ts`.
+4. New UI behaviors:
+   edit `src/App.vue` and presentational components under `src/components`.
+5. New Lovelace editor fields:
+   edit `src/lovelace-3d-editor.ts`.
+
+## Development
+
+```bash
+npm install
+npm run dev
+npm run build
+```
+
+Build output is emitted to Home Assistant's `www` directory per local Vite config.

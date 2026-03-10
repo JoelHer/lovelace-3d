@@ -15,13 +15,14 @@
 
 <script setup lang="ts">
 import { computed } from "vue"
+import type { HassEntityState, HassLike } from "../types/homeAssistant"
 
 const props = defineProps<{
-  hass: any | null
+  hass: HassLike | null
   entityId: string
 }>()
 
-const entity = computed(() => {
+const entity = computed<HassEntityState | null>(() => {
   const h = props.hass
   if (!h?.states || !props.entityId) return null
   return h.states[props.entityId] ?? null
