@@ -2,23 +2,6 @@
 
 A Home Assistant custom Lovelace card that renders a 3D floorplan and room action popups.
 
-## What This Refactor Changed
-
-The codebase is now split by responsibility so new features can be added without touching unrelated files:
-
-- `src/App.vue`
-  UI orchestration only: mounts Three.js, opens/closes popup, runs selected action.
-- `src/features/rooms/*`
-  Pure domain logic for room parsing, action parsing, templating, and room signatures.
-- `src/composables/useThreeFloorplan.ts`
-  Three.js lifecycle orchestration (mount/update/unmount) with isolated helper modules.
-- `src/three/roomMeshes.ts`
-  Floor mesh/group creation and mesh geometry disposal.
-- `src/three/walls.ts`
-  Wall mesh generation, shared shader material creation, and camera-view uniform sync.
-- `src/types/*`
-  Shared app-level Home Assistant and Lovelace card types.
-
 ## Project Structure
 
 - `src/lovelace-3d.ts`: custom element entrypoint and card registration.
