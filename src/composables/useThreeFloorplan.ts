@@ -45,6 +45,7 @@ type UseThreeFloorplan = {
   mount(el: HTMLElement, rooms: Room[], options?: MountOptions): void;
   updateRooms(rooms: Room[]): void;
   projectWorldPoint(worldX: number, worldY: number, worldZ: number): ProjectedPoint | null;
+  subscribeFrame(listener: () => void): () => void;
   isMounted(): boolean;
   unmount(): void;
 };
@@ -70,6 +71,7 @@ type FloorplanState = {
   wallGroup: Group | null;
   wallMaterial: MeshStandardMaterial | null;
   pointerCleanup: (() => void) | null;
+  frameListeners: Set<() => void>;
   viewDirUniform: ViewDirectionUniform;
 };
 
@@ -281,12 +283,17 @@ function stopAnimation(state: FloorplanState): void {
 function renderFrame(state: FloorplanState): void {
   if (!state.renderer || !state.scene || !state.camera) return;
 
+  state.controls?.update();
+
   if (state.wallMaterial) {
     state.viewDirUniform.value.set(0, 0, -1).applyQuaternion(state.camera.quaternion).normalize();
     syncWallMaterialViewDirection(state.wallMaterial, state.viewDirUniform.value);
   }
 
-  state.controls?.update();
+  for (const listener of state.frameListeners) {
+    listener();
+  }
+
   state.renderer.render(state.scene, state.camera);
   state.frameId = window.requestAnimationFrame(() => renderFrame(state));
 }
@@ -299,6 +306,7 @@ function cleanupState(state: FloorplanState): void {
 
   state.pointerCleanup?.();
   state.pointerCleanup = null;
+  state.frameListeners.clear();
 
   state.controls?.dispose();
   state.controls = null;
@@ -343,6 +351,7 @@ function projectWorldPoint(
   const rect = state.renderer.domElement.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return null;
 
+  state.camera.updateMatrixWorld();
   projectedWorldPoint.set(worldX, worldY, worldZ);
   cameraSpacePoint.copy(projectedWorldPoint).applyMatrix4(state.camera.matrixWorldInverse);
   projectedWorldPoint.project(state.camera);
@@ -373,6 +382,7 @@ export function useThreeFloorplan(): UseThreeFloorplan {
     wallGroup: null,
     wallMaterial: null,
     pointerCleanup: null,
+    frameListeners: new Set(),
     viewDirUniform: { value: new Vector3(0, 0, -1) },
   };
 
@@ -417,6 +427,12 @@ export function useThreeFloorplan(): UseThreeFloorplan {
     mount,
     updateRooms,
     projectWorldPoint: (worldX, worldY, worldZ) => projectWorldPoint(state, worldX, worldY, worldZ),
+    subscribeFrame: (listener) => {
+      state.frameListeners.add(listener);
+      return () => {
+        state.frameListeners.delete(listener);
+      };
+    },
     isMounted: () => state.mounted,
     unmount,
   };

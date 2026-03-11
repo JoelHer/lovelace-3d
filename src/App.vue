@@ -126,7 +126,7 @@ const runningFloaterAction = ref<"primary" | "secondary" | null>(null);
 const roomPopup = ref<PopupState | null>(null);
 const floaterPopupId = ref<string | null>(null);
 const floaterScreenById = ref<Record<string, { x: number; y: number; visible: boolean }>>({});
-let floaterProjectionFrame: number | null = null;
+let unsubscribeFloaterFrame: (() => void) | null = null;
 
 const roomEntries = computed(() =>
   parseRoomEntries(cfg.value.rooms, {
@@ -484,7 +484,9 @@ async function runFloaterSecondaryAction() {
 
 function updateFloaterProjections() {
   if (!three.isMounted()) {
-    floaterScreenById.value = {};
+    if (Object.keys(floaterScreenById.value).length > 0) {
+      floaterScreenById.value = {};
+    }
   } else {
     const next: Record<string, { x: number; y: number; visible: boolean }> = {};
 
@@ -496,26 +498,13 @@ function updateFloaterProjections() {
 
     floaterScreenById.value = next;
   }
-
-  floaterProjectionFrame = window.requestAnimationFrame(updateFloaterProjections);
-}
-
-function startFloaterProjectionLoop() {
-  if (floaterProjectionFrame !== null) return;
-  floaterProjectionFrame = window.requestAnimationFrame(updateFloaterProjections);
-}
-
-function stopFloaterProjectionLoop() {
-  if (floaterProjectionFrame === null) return;
-  window.cancelAnimationFrame(floaterProjectionFrame);
-  floaterProjectionFrame = null;
 }
 
 const roomsSignature = computed(() => createRoomsSignature(rooms.value));
 const floatersSignature = computed(() => createFloatersSignature(floaters.value));
 
 onMounted(() => {
-  startFloaterProjectionLoop();
+  unsubscribeFloaterFrame = three.subscribeFrame(updateFloaterProjections);
 
   watch(
     [areasReady, roomsSignature],
@@ -529,13 +518,15 @@ onMounted(() => {
       } else {
         three.updateRooms(nextRooms);
       }
+      updateFloaterProjections();
     },
     { immediate: true }
   );
 });
 
 onBeforeUnmount(() => {
-  stopFloaterProjectionLoop();
+  unsubscribeFloaterFrame?.();
+  unsubscribeFloaterFrame = null;
 });
 
 watch(roomsSignature, () => {
@@ -545,6 +536,8 @@ watch(roomsSignature, () => {
 });
 
 watch(floatersSignature, () => {
+  updateFloaterProjections();
+
   if (!floaterPopupId.value) return;
   if (!floatersById.value[floaterPopupId.value]) {
     closeFloaterPopup();

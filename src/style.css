@@ -73,9 +73,10 @@
 
 .floater-btn {
   position: absolute;
-  left: var(--floater-x);
-  top: var(--floater-y);
-  transform: translate(-50%, -50%);
+  left: 0;
+  top: 0;
+  transform: translate3d(var(--floater-x), var(--floater-y), 0) translate(-50%, -50%);
+  will-change: transform;
 
   width: 42px;
   height: 42px;
