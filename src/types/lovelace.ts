@@ -5,6 +5,8 @@ export type LovelaceConfig = {
   entity?: string;
   rooms?: unknown;
   floaters?: unknown;
+  heatmaps?: unknown;
+  navbar?: unknown;
   room_popup_actions?: unknown;
   room_actions?: unknown;
   [key: string]: unknown;

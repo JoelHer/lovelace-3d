@@ -11,23 +11,46 @@
           <div ref="threeMount" class="three-surface" aria-label="Three.js preview" />
 
           <div
-            v-if="renderedFloaters.length > 0"
+            v-if="renderedFloaterButtons.length > 0"
             class="floater-layer"
             aria-label="Floating entity controls"
           >
             <FloaterButton
-              v-for="floater in renderedFloaters"
-              :key="floater.id"
-              :x="floater.x"
-              :y="floater.y"
-              :icon="floater.icon"
-              :label="floater.label"
-              :is-on="floater.isOn"
-              :accent-color="floater.accentColor"
-              :is-active="floaterPopupId === floater.id"
-              @press="onFloaterPressed(floater.id)"
-              @long-press="onFloaterLongPressed(floater.id)"
+              v-for="button in renderedFloaterButtons"
+              :key="button.id"
+              :x="button.x"
+              :y="button.y"
+              :icon="button.icon"
+              :label="button.label"
+              :is-on="button.isOn"
+              :accent-color="button.accentColor"
+              :is-active="button.isActive"
+              :is-group="button.isGroup"
+              :group-count="button.groupCount"
+              @press="onFloaterButtonPressed(button)"
+              @long-press="onFloaterButtonLongPressed(button)"
             />
+          </div>
+
+          <div
+            v-if="renderedNavbarItems.length > 0"
+            class="navbar-layer"
+            :class="[navbarPositionClass, navbarOrientationClass]"
+          >
+            <nav class="control-navbar" :style="navbarStyle" aria-label="Floorplan controls">
+              <button
+                v-for="item in renderedNavbarItems"
+                :key="item.id"
+                class="navbar-btn"
+                :class="{ active: isNavbarItemActive(item) }"
+                type="button"
+                :aria-label="item.label"
+                @click="onNavbarItemPressed(item)"
+              >
+                <ha-icon class="navbar-icon" :icon="item.icon" />
+                <span class="navbar-label">{{ item.label }}</span>
+              </button>
+            </nav>
           </div>
 
           <div
@@ -89,14 +112,24 @@ import EntityState from "./components/EntityState.vue";
 import FloaterButton from "./components/FloaterButton.vue";
 import FloaterEntityPopup from "./components/FloaterEntityPopup.vue";
 import RoomActionPopup from "./components/RoomActionPopup.vue";
-import { useThreeFloorplan, type RoomClickEvent } from "./composables/useThreeFloorplan";
+import {
+  useThreeFloorplan,
+  type HeatmapRenderData,
+  type RoomClickEvent,
+} from "./composables/useThreeFloorplan";
 import { useAreaRegistry } from "./composables/useAreaRegistry";
+import { createHeatmapSignature, parseHeatmapConfig, type HeatmapConfig } from "./features/heatmaps";
 import {
   createFloatersSignature,
   type FloaterAction,
   parseFloaters,
   type FloaterConfig,
 } from "./features/floaters";
+import {
+  parseNavbarConfig,
+  type NavbarConfig,
+  type NavbarItemConfig,
+} from "./features/navbar";
 import {
   applyActionTemplates,
   buildRoomActionConfigMap,
@@ -125,7 +158,12 @@ const runningFloaterAction = ref<"primary" | "secondary" | null>(null);
 
 const roomPopup = ref<PopupState | null>(null);
 const floaterPopupId = ref<string | null>(null);
+const expandedFloaterGroupId = ref<string | null>(null);
+const floaterGroupExpansionAnimation = ref<{ groupId: string; startedAtMs: number } | null>(null);
+const floaterGroupExpansionProgress = ref(1);
 const floaterScreenById = ref<Record<string, { x: number; y: number; visible: boolean }>>({});
+const heatmapVisible = ref(true);
+let heatmapVisibilityInitialized = false;
 let unsubscribeFloaterFrame: (() => void) | null = null;
 
 const roomEntries = computed(() =>
@@ -175,6 +213,58 @@ const floatersById = computed<Record<string, FloaterConfig>>(() => {
   }
   return map;
 });
+
+const heatmapConfig = computed<HeatmapConfig>(() => parseHeatmapConfig(cfg.value.heatmaps));
+const navbarConfig = computed<NavbarConfig>(() => parseNavbarConfig(cfg.value.navbar));
+const HEATMAP_AUTO_RANGE_PADDING_RATIO = 0.12;
+
+const FLOATER_OVERLAP_DISTANCE_PX = 40;
+const FLOATER_GROUP_ICON = "mdi:layers-triple";
+const FLOATER_GROUP_COLLAPSE_ICON = "mdi:close";
+const FLOATER_GROUP_RADIUS_BASE_PX = 52;
+const FLOATER_GROUP_RADIUS_STEP_PX = 4;
+const FLOATER_GROUP_RADIUS_CAP_PX = 84;
+const FLOATER_GROUP_EXPAND_DURATION_MS = 120;
+
+type RenderedFloater = {
+  id: string;
+  label: string;
+  icon: string;
+  x: number;
+  y: number;
+  isOn: boolean;
+  accentColor: string | null;
+};
+
+type FloaterGroup = {
+  id: string;
+  x: number;
+  y: number;
+  items: RenderedFloater[];
+};
+
+type FloaterButtonRender = {
+  id: string;
+  x: number;
+  y: number;
+  icon: string;
+  label: string;
+  isOn: boolean;
+  accentColor: string | null;
+  isActive: boolean;
+  isGroup: boolean;
+  groupCount: number | null;
+  floaterId: string | null;
+  groupId: string | null;
+};
+
+type ResolvedHeatmapSensor = {
+  x: number;
+  z: number;
+  value: number;
+  radius: number;
+  weight: number;
+};
 
 function asNumber(value: unknown): number | null {
   const next = Number(value);
@@ -250,26 +340,259 @@ function resolveFloaterAccentColor(
   return null;
 }
 
-const renderedFloaters = computed<
-  Array<{
-    id: string;
-    label: string;
-    icon: string;
-    x: number;
-    y: number;
-    isOn: boolean;
-    accentColor: string | null;
-  }>
->(() => {
-  const rendered: Array<{
-    id: string;
-    label: string;
-    icon: string;
-    x: number;
-    y: number;
-    isOn: boolean;
-    accentColor: string | null;
-  }> = [];
+function parseNumericText(value: string): number | null {
+  const direct = Number(value);
+  if (Number.isFinite(direct)) return direct;
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function resolveHeatmapSensorValue(
+  sensor: HeatmapConfig["sensors"][number],
+  entityState: HassEntityState | undefined
+): number | null {
+  if (!entityState) return null;
+
+  if (sensor.valueAttribute) {
+    const rawAttributeValue = entityState.attributes?.[sensor.valueAttribute];
+    if (rawAttributeValue !== undefined) {
+      const numericAttributeValue = asNumber(rawAttributeValue);
+      if (numericAttributeValue !== null) return numericAttributeValue;
+      return parseNumericText(String(rawAttributeValue));
+    }
+  }
+
+  return parseNumericText(String(entityState.state ?? ""));
+}
+
+const heatmapRenderData = computed<HeatmapRenderData | null>(() => {
+  const config = heatmapConfig.value;
+  if (!config.enabled || config.sensors.length === 0) return null;
+
+  const sensors: ResolvedHeatmapSensor[] = [];
+  let observedMin = Number.POSITIVE_INFINITY;
+  let observedMax = Number.NEGATIVE_INFINITY;
+
+  for (const sensor of config.sensors) {
+    const entityState = hass.value?.states?.[sensor.entityId] as HassEntityState | undefined;
+    const value = resolveHeatmapSensorValue(sensor, entityState);
+    if (value === null) continue;
+
+    sensors.push({
+      x: sensor.point.x,
+      z: sensor.point.z,
+      value,
+      radius: sensor.radius,
+      weight: sensor.weight,
+    });
+
+    if (value < observedMin) observedMin = value;
+    if (value > observedMax) observedMax = value;
+  }
+
+  if (sensors.length === 0) return null;
+
+  let minValue = config.minValue ?? observedMin;
+  let maxValue = config.maxValue ?? observedMax;
+
+  if (!Number.isFinite(minValue)) minValue = observedMin;
+  if (!Number.isFinite(maxValue)) maxValue = observedMax;
+  if (!Number.isFinite(minValue) || !Number.isFinite(maxValue)) return null;
+
+  const usingAutoMin = config.minValue === null;
+  const usingAutoMax = config.maxValue === null;
+  const baseRange = Math.max(0.0001, maxValue - minValue);
+  const padding = Math.max(0.2, baseRange * HEATMAP_AUTO_RANGE_PADDING_RATIO);
+  if (usingAutoMin) minValue -= padding;
+  if (usingAutoMax) maxValue += padding;
+  if (maxValue - minValue < 0.0001) {
+    maxValue = minValue + 1;
+  }
+
+  return {
+    samples: sensors,
+    minValue,
+    maxValue,
+    opacity: config.opacity,
+    resolution: config.resolution,
+    blur: config.blur,
+    visible: heatmapVisible.value,
+  };
+});
+
+const renderedNavbarItems = computed<NavbarItemConfig[]>(() => {
+  const config = navbarConfig.value;
+  if (!config.enabled) return [];
+
+  const hasHeatmap = heatmapConfig.value.enabled && heatmapConfig.value.sensors.length > 0;
+  return config.items.filter((item) => {
+    if (item.action === "toggle-heatmap") return hasHeatmap;
+    return true;
+  });
+});
+
+const navbarPositionClass = computed(() => `pos-${navbarConfig.value.position}`);
+const navbarOrientationClass = computed(() => {
+  const position = navbarConfig.value.position;
+  return position === "top" || position === "bottom" ? "horizontal" : "vertical";
+});
+
+const navbarStyle = computed<Record<string, string>>(() => {
+  const config = navbarConfig.value;
+  const fallbackBackground = config.transparent
+    ? `rgba(16, 19, 26, ${config.opacity.toFixed(3)})`
+    : `rgba(16, 19, 26, 0.94)`;
+
+  return {
+    "--navbar-offset-x": `${config.offsetX}px`,
+    "--navbar-offset-y": `${config.offsetY}px`,
+    "--navbar-bg": config.backgroundColor ?? fallbackBackground,
+    "--navbar-border": config.borderColor ?? "rgba(255, 255, 255, 0.16)",
+    "--navbar-text": config.textColor ?? "var(--primary-text-color)",
+    "--navbar-icon": config.iconColor ?? config.textColor ?? "var(--primary-text-color)",
+    "--navbar-blur": `${config.blur}px`,
+  };
+});
+
+function isNavbarItemActive(item: NavbarItemConfig): boolean {
+  if (item.action === "toggle-heatmap") {
+    return !!heatmapRenderData.value && heatmapVisible.value;
+  }
+  return false;
+}
+
+function onNavbarItemPressed(item: NavbarItemConfig) {
+  if (item.action === "toggle-heatmap") {
+    heatmapVisible.value = !heatmapVisible.value;
+  }
+}
+
+function collectFloaterGroups(items: ReadonlyArray<RenderedFloater>): FloaterGroup[] {
+  if (items.length === 0) return [];
+
+  const groups: FloaterGroup[] = [];
+  const queued = new Set<number>();
+  const overlapDistanceSquared = FLOATER_OVERLAP_DISTANCE_PX * FLOATER_OVERLAP_DISTANCE_PX;
+
+  for (let startIndex = 0; startIndex < items.length; startIndex += 1) {
+    if (queued.has(startIndex)) continue;
+
+    const groupIndices: number[] = [];
+    const indexQueue: number[] = [startIndex];
+    queued.add(startIndex);
+
+    while (indexQueue.length > 0) {
+      const index = indexQueue.pop();
+      if (index === undefined) break;
+
+      groupIndices.push(index);
+      const anchor = items[index];
+      if (!anchor) continue;
+
+      for (let candidateIndex = 0; candidateIndex < items.length; candidateIndex += 1) {
+        if (queued.has(candidateIndex)) continue;
+        const candidate = items[candidateIndex];
+        if (!candidate) continue;
+        const dx = anchor.x - candidate.x;
+        const dy = anchor.y - candidate.y;
+        if (dx * dx + dy * dy > overlapDistanceSquared) continue;
+
+        queued.add(candidateIndex);
+        indexQueue.push(candidateIndex);
+      }
+    }
+
+    const groupItems = groupIndices
+      .map((index) => items[index])
+      .filter((item): item is RenderedFloater => item !== undefined)
+      .sort((a, b) => a.id.localeCompare(b.id));
+    if (groupItems.length === 0) continue;
+    const groupCenter = groupItems.reduce(
+      (acc, item) => {
+        acc.x += item.x;
+        acc.y += item.y;
+        return acc;
+      },
+      { x: 0, y: 0 }
+    );
+
+    groups.push({
+      id: groupItems.map((item) => item.id).join("|"),
+      x: groupCenter.x / groupItems.length,
+      y: groupCenter.y / groupItems.length,
+      items: groupItems,
+    });
+  }
+
+  groups.sort((a, b) => a.id.localeCompare(b.id));
+  return groups;
+}
+
+function resolveGroupAccentColor(items: ReadonlyArray<RenderedFloater>): string | null {
+  for (const item of items) {
+    if (item.accentColor) return item.accentColor;
+  }
+  return null;
+}
+
+function resolveGroupIcon(items: ReadonlyArray<RenderedFloater>): string {
+  for (const item of items) {
+    if (item.isOn) return item.icon;
+  }
+  return items[0]?.icon || FLOATER_GROUP_ICON;
+}
+
+function resolveGroupRadius(itemCount: number): number {
+  if (itemCount <= 2) return FLOATER_GROUP_RADIUS_BASE_PX;
+  const scaledRadius = FLOATER_GROUP_RADIUS_BASE_PX + (itemCount - 2) * FLOATER_GROUP_RADIUS_STEP_PX;
+  return Math.min(FLOATER_GROUP_RADIUS_CAP_PX, scaledRadius);
+}
+
+function easeOutCubic(value: number): number {
+  const clamped = Math.max(0, Math.min(1, value));
+  return 1 - (1 - clamped) ** 3;
+}
+
+function startFloaterGroupExpandAnimation(groupId: string) {
+  floaterGroupExpansionAnimation.value = {
+    groupId,
+    startedAtMs: performance.now(),
+  };
+  floaterGroupExpansionProgress.value = 0;
+}
+
+function stopFloaterGroupExpandAnimation() {
+  floaterGroupExpansionAnimation.value = null;
+  floaterGroupExpansionProgress.value = 1;
+}
+
+function updateFloaterGroupExpandAnimation(nowMs: number) {
+  const animation = floaterGroupExpansionAnimation.value;
+  if (!animation) return;
+
+  if (expandedFloaterGroupId.value !== animation.groupId) {
+    stopFloaterGroupExpandAnimation();
+    return;
+  }
+
+  const linearProgress = Math.min(
+    1,
+    Math.max(0, (nowMs - animation.startedAtMs) / FLOATER_GROUP_EXPAND_DURATION_MS)
+  );
+  floaterGroupExpansionProgress.value = linearProgress;
+  if (linearProgress >= 1) {
+    stopFloaterGroupExpandAnimation();
+  }
+}
+
+function resolveGroupExpansionProgress(groupId: string): number {
+  const animation = floaterGroupExpansionAnimation.value;
+  if (!animation || animation.groupId !== groupId) return 1;
+  return easeOutCubic(floaterGroupExpansionProgress.value);
+}
+
+const renderedFloaters = computed<RenderedFloater[]>(() => {
+  const rendered: RenderedFloater[] = [];
 
   for (const floater of floaters.value) {
     const projection = floaterScreenById.value[floater.id];
@@ -292,6 +615,95 @@ const renderedFloaters = computed<
   }
 
   return rendered;
+});
+
+const floaterGroups = computed<FloaterGroup[]>(() => collectFloaterGroups(renderedFloaters.value));
+
+const renderedFloaterButtons = computed<FloaterButtonRender[]>(() => {
+  const buttons: FloaterButtonRender[] = [];
+
+  for (const group of floaterGroups.value) {
+    if (group.items.length === 1) {
+      const item = group.items[0];
+      if (!item) continue;
+      buttons.push({
+        id: `floater-${item.id}`,
+        x: item.x,
+        y: item.y,
+        icon: item.icon,
+        label: item.label,
+        isOn: item.isOn,
+        accentColor: item.accentColor,
+        isActive: floaterPopupId.value === item.id,
+        isGroup: false,
+        groupCount: null,
+        floaterId: item.id,
+        groupId: null,
+      });
+      continue;
+    }
+
+    const isExpanded = expandedFloaterGroupId.value === group.id;
+    const expansionProgress = resolveGroupExpansionProgress(group.id);
+    const hasActiveFloater = group.items.some((item) => floaterPopupId.value === item.id);
+
+    if (!isExpanded) {
+      buttons.push({
+        id: `group-${group.id}`,
+        x: group.x,
+        y: group.y,
+        icon: resolveGroupIcon(group.items),
+        label: `${group.items.length} overlapping controls`,
+        isOn: group.items.some((item) => item.isOn),
+        accentColor: resolveGroupAccentColor(group.items),
+        isActive: hasActiveFloater,
+        isGroup: true,
+        groupCount: group.items.length,
+        floaterId: null,
+        groupId: group.id,
+      });
+      continue;
+    }
+
+    buttons.push({
+      id: `group-center-${group.id}`,
+      x: group.x,
+      y: group.y,
+      icon: FLOATER_GROUP_COLLAPSE_ICON,
+      label: `Collapse ${group.items.length} controls`,
+      isOn: false,
+      accentColor: null,
+      isActive: false,
+      isGroup: true,
+      groupCount: group.items.length,
+      floaterId: null,
+      groupId: group.id,
+    });
+
+    const radius = resolveGroupRadius(group.items.length);
+    const angleStep = (Math.PI * 2) / group.items.length;
+    const startAngle = -Math.PI / 2;
+
+    group.items.forEach((item, index) => {
+      const angle = startAngle + angleStep * index;
+      buttons.push({
+        id: `group-item-${group.id}-${item.id}`,
+        x: group.x + Math.cos(angle) * radius * expansionProgress,
+        y: group.y + Math.sin(angle) * radius * expansionProgress,
+        icon: item.icon,
+        label: item.label,
+        isOn: item.isOn,
+        accentColor: item.accentColor,
+        isActive: floaterPopupId.value === item.id,
+        isGroup: false,
+        groupCount: null,
+        floaterId: item.id,
+        groupId: null,
+      });
+    });
+  }
+
+  return buttons;
 });
 
 const activeFloater = computed<FloaterConfig | null>(() => {
@@ -344,6 +756,11 @@ function closeRoomPopup() {
   runningActionId.value = null;
 }
 
+function closeFloaterGroup() {
+  expandedFloaterGroupId.value = null;
+  stopFloaterGroupExpandAnimation();
+}
+
 function closeFloaterPopup() {
   floaterPopupId.value = null;
   runningFloaterAction.value = null;
@@ -351,7 +768,37 @@ function closeFloaterPopup() {
 
 function openFloaterPopup(floaterId: string) {
   closeRoomPopup();
+  closeFloaterGroup();
   floaterPopupId.value = floaterId;
+}
+
+function toggleFloaterGroup(groupId: string) {
+  closeRoomPopup();
+  closeFloaterPopup();
+
+  if (expandedFloaterGroupId.value === groupId) {
+    expandedFloaterGroupId.value = null;
+    stopFloaterGroupExpandAnimation();
+    return;
+  }
+
+  expandedFloaterGroupId.value = groupId;
+  startFloaterGroupExpandAnimation(groupId);
+}
+
+function onFloaterButtonPressed(button: FloaterButtonRender) {
+  if (button.groupId) {
+    toggleFloaterGroup(button.groupId);
+    return;
+  }
+
+  if (!button.floaterId) return;
+  void onFloaterPressed(button.floaterId);
+}
+
+function onFloaterButtonLongPressed(button: FloaterButtonRender) {
+  if (button.groupId || !button.floaterId) return;
+  void onFloaterLongPressed(button.floaterId);
 }
 
 async function onFloaterPressed(floaterId: string) {
@@ -359,6 +806,7 @@ async function onFloaterPressed(floaterId: string) {
   if (!floater) return;
 
   closeRoomPopup();
+  closeFloaterGroup();
   try {
     await runFloaterEntityAction(floater, floater.tapAction);
   } catch (error) {
@@ -371,6 +819,7 @@ async function onFloaterLongPressed(floaterId: string) {
   if (!floater) return;
 
   closeRoomPopup();
+  closeFloaterGroup();
   try {
     await runFloaterEntityAction(floater, floater.holdAction);
   } catch (error) {
@@ -380,6 +829,7 @@ async function onFloaterLongPressed(floaterId: string) {
 
 function onRoomClick(event: RoomClickEvent) {
   closeFloaterPopup();
+  closeFloaterGroup();
   roomPopup.value = {
     roomId: event.roomId,
     roomName: event.roomName || event.roomId,
@@ -483,6 +933,8 @@ async function runFloaterSecondaryAction() {
 }
 
 function updateFloaterProjections() {
+  updateFloaterGroupExpandAnimation(performance.now());
+
   if (!three.isMounted()) {
     if (Object.keys(floaterScreenById.value).length > 0) {
       floaterScreenById.value = {};
@@ -500,8 +952,14 @@ function updateFloaterProjections() {
   }
 }
 
+function updateHeatmapOverlay() {
+  if (!three.isMounted()) return;
+  three.updateHeatmap(heatmapRenderData.value);
+}
+
 const roomsSignature = computed(() => createRoomsSignature(rooms.value));
 const floatersSignature = computed(() => createFloatersSignature(floaters.value));
+const heatmapSignature = computed(() => createHeatmapSignature(heatmapConfig.value));
 
 onMounted(() => {
   unsubscribeFloaterFrame = three.subscribeFrame(updateFloaterProjections);
@@ -519,6 +977,7 @@ onMounted(() => {
         three.updateRooms(nextRooms);
       }
       updateFloaterProjections();
+      updateHeatmapOverlay();
     },
     { immediate: true }
   );
@@ -536,11 +995,37 @@ watch(roomsSignature, () => {
 });
 
 watch(floatersSignature, () => {
+  closeFloaterGroup();
   updateFloaterProjections();
 
   if (!floaterPopupId.value) return;
   if (!floatersById.value[floaterPopupId.value]) {
     closeFloaterPopup();
   }
+});
+
+watch(
+  heatmapSignature,
+  () => {
+    const config = heatmapConfig.value;
+    if (!config.enabled || config.sensors.length === 0) {
+      heatmapVisible.value = false;
+      heatmapVisibilityInitialized = false;
+      updateHeatmapOverlay();
+      return;
+    }
+
+    if (!heatmapVisibilityInitialized) {
+      heatmapVisible.value = config.defaultVisible;
+      heatmapVisibilityInitialized = true;
+    }
+
+    updateHeatmapOverlay();
+  },
+  { immediate: true }
+);
+
+watch(heatmapRenderData, () => {
+  updateHeatmapOverlay();
 });
 </script>

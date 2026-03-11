@@ -7,6 +7,8 @@ const EDITOR_TAG = "lovelace-3d-editor";
 const CARD_TYPE = "custom:lovelace-3d";
 const ROOMS_KEY = "rooms";
 const FLOATERS_KEY = "floaters";
+const HEATMAPS_KEY = "heatmaps";
+const NAVBAR_KEY = "navbar";
 const ACTIONS_KEY = "room_popup_actions";
 const LEGACY_ACTIONS_KEY = "room_actions";
 
@@ -15,9 +17,13 @@ class Lovelace3DEditor extends LitElement {
   private _config: LovelaceConfig = {};
   private _roomsYaml = "";
   private _floatersYaml = "";
+  private _heatmapsYaml = "";
+  private _navbarYaml = "";
   private _actionsYaml = "";
   private _roomsError = "";
   private _floatersError = "";
+  private _heatmapsError = "";
+  private _navbarError = "";
   private _actionsError = "";
 
   static properties = {
@@ -25,9 +31,13 @@ class Lovelace3DEditor extends LitElement {
     _config: { state: true },
     _roomsYaml: { state: true },
     _floatersYaml: { state: true },
+    _heatmapsYaml: { state: true },
+    _navbarYaml: { state: true },
     _actionsYaml: { state: true },
     _roomsError: { state: true },
     _floatersError: { state: true },
+    _heatmapsError: { state: true },
+    _navbarError: { state: true },
     _actionsError: { state: true },
   };
 
@@ -101,9 +111,13 @@ class Lovelace3DEditor extends LitElement {
     this._config = { ...(config ?? {}) };
     this._roomsYaml = this._toYamlArray(this._config[ROOMS_KEY]);
     this._floatersYaml = this._toYamlArray(this._config[FLOATERS_KEY]);
+    this._heatmapsYaml = this._toYamlArray(this._config[HEATMAPS_KEY]);
+    this._navbarYaml = this._toYamlObject(this._config[NAVBAR_KEY]);
     this._actionsYaml = this._toYamlArray(this._config[ACTIONS_KEY] ?? this._config[LEGACY_ACTIONS_KEY]);
     this._roomsError = "";
     this._floatersError = "";
+    this._heatmapsError = "";
+    this._navbarError = "";
     this._actionsError = "";
   }
 
@@ -112,6 +126,7 @@ class Lovelace3DEditor extends LitElement {
 
     const roomsPreview = this._safeParseYamlArray(this._roomsYaml);
     const floatersPreview = this._safeParseYamlArray(this._floatersYaml);
+    const heatmapsPreview = this._safeParseYamlArray(this._heatmapsYaml);
 
     return html`
       <div class="editor">
@@ -163,6 +178,40 @@ class Lovelace3DEditor extends LitElement {
         </ha-expansion-panel>
 
         <ha-expansion-panel outlined>
+          <h4 slot="header">Heatmaps YAML</h4>
+          <div class="panel-content">
+            <ha-code-editor
+              .hass=${this.hass}
+              .mode=${"yaml"}
+              .value=${this._heatmapsYaml}
+              @value-changed=${this._heatmapsYamlChanged}
+            ></ha-code-editor>
+            <div class="help">
+              Configure heatmap sensors with <code>entity</code> and <code>position: [x, y, z]</code>. Optional:
+              <code>radius</code>, <code>weight</code>, and <code>value_attribute</code>.
+            </div>
+            ${this._heatmapsError ? html`<div class="error">${this._heatmapsError}</div>` : nothing}
+          </div>
+        </ha-expansion-panel>
+
+        <ha-expansion-panel outlined>
+          <h4 slot="header">Navbar YAML</h4>
+          <div class="panel-content">
+            <ha-code-editor
+              .hass=${this.hass}
+              .mode=${"yaml"}
+              .value=${this._navbarYaml}
+              @value-changed=${this._navbarYamlChanged}
+            ></ha-code-editor>
+            <div class="help">
+              Configure navbar placement and look. Example: <code>position</code>, <code>transparent</code>,
+              <code>offset_x</code>, and <code>items</code>.
+            </div>
+            ${this._navbarError ? html`<div class="error">${this._navbarError}</div>` : nothing}
+          </div>
+        </ha-expansion-panel>
+
+        <ha-expansion-panel outlined>
           <h4 slot="header">Default Popup Actions YAML</h4>
           <div class="panel-content">
             <ha-code-editor
@@ -193,6 +242,15 @@ class Lovelace3DEditor extends LitElement {
             ${floatersPreview.length === 0
               ? html`<li class="preview-row"><span>No floaters configured.</span></li>`
               : floatersPreview.map((floater, index) => this._renderFloaterPreviewRow(floater, index))}
+          </ul>
+        </div>
+
+        <div class="preview">
+          <div class="preview-title">Heatmaps Preview</div>
+          <ul class="preview-list">
+            ${heatmapsPreview.length === 0
+              ? html`<li class="preview-row"><span>No heatmap sensors configured.</span></li>`
+              : heatmapsPreview.map((sensor, index) => this._renderHeatmapPreviewRow(sensor, index))}
           </ul>
         </div>
       </div>
@@ -247,6 +305,26 @@ class Lovelace3DEditor extends LitElement {
     `;
   }
 
+  private _renderHeatmapPreviewRow(sensor: unknown, index: number) {
+    const sensorObj =
+      sensor && typeof sensor === "object"
+        ? (sensor as Record<string, unknown>)
+        : ({} as Record<string, unknown>);
+    const entityId = String(sensorObj.entity ?? sensorObj.entity_id ?? `sensor_${index + 1}`);
+    const radius = Number(sensorObj.radius);
+    const radiusLabel = Number.isFinite(radius) ? radius.toFixed(2) : "default";
+    const attribute = String(sensorObj.value_attribute ?? sensorObj.attribute ?? "").trim();
+
+    return html`
+      <li class="preview-row">
+        <span>${entityId}</span>
+        <span class="preview-meta"
+          >radius:${radiusLabel}${attribute ? ` attr:${attribute}` : ""}</span
+        >
+      </li>
+    `;
+  }
+
   private _computeLabel = (schema: { name?: string }) => {
     if (schema.name === "entity") return "Entity";
     return schema.name ?? "";
@@ -268,13 +346,26 @@ class Lovelace3DEditor extends LitElement {
     this._updateYamlField("floaters", String(ev.detail?.value ?? ""));
   };
 
+  private _heatmapsYamlChanged = (ev: CustomEvent) => {
+    this._updateYamlField("heatmaps", String(ev.detail?.value ?? ""));
+  };
+
+  private _navbarYamlChanged = (ev: CustomEvent) => {
+    this._updateYamlField("navbar", String(ev.detail?.value ?? ""));
+  };
+
   private _actionsYamlChanged = (ev: CustomEvent) => {
     this._updateYamlField("actions", String(ev.detail?.value ?? ""));
   };
 
-  private _updateYamlField(field: "rooms" | "floaters" | "actions", nextValue: string) {
+  private _updateYamlField(
+    field: "rooms" | "floaters" | "heatmaps" | "navbar" | "actions",
+    nextValue: string
+  ) {
     if (field === "rooms") this._roomsYaml = nextValue;
     else if (field === "floaters") this._floatersYaml = nextValue;
+    else if (field === "heatmaps") this._heatmapsYaml = nextValue;
+    else if (field === "navbar") this._navbarYaml = nextValue;
     else this._actionsYaml = nextValue;
     this._emitConfigFromYaml();
   }
@@ -284,15 +375,23 @@ class Lovelace3DEditor extends LitElement {
 
     const rooms = this._parseYamlArraySafe(this._roomsYaml, "Rooms", "_roomsError");
     const floaters = this._parseYamlArraySafe(this._floatersYaml, "Floaters", "_floatersError");
+    const heatmaps = this._parseYamlArraySafe(this._heatmapsYaml, "Heatmaps", "_heatmapsError");
+    const navbar = this._parseYamlObjectSafe(this._navbarYaml, "Navbar", "_navbarError");
     const actions = this._parseYamlArraySafe(this._actionsYaml, "Default popup actions", "_actionsError");
 
-    if (!rooms || !floaters || !actions) return;
+    if (!rooms || !floaters || !heatmaps || !actions || navbar === null) return;
 
     if (rooms.length > 0) nextConfig[ROOMS_KEY] = rooms;
     else delete nextConfig[ROOMS_KEY];
 
     if (floaters.length > 0) nextConfig[FLOATERS_KEY] = floaters;
     else delete nextConfig[FLOATERS_KEY];
+
+    if (heatmaps.length > 0) nextConfig[HEATMAPS_KEY] = heatmaps;
+    else delete nextConfig[HEATMAPS_KEY];
+
+    if (navbar && Object.keys(navbar).length > 0) nextConfig[NAVBAR_KEY] = navbar;
+    else delete nextConfig[NAVBAR_KEY];
 
     if (actions.length > 0) nextConfig[ACTIONS_KEY] = actions;
     else delete nextConfig[ACTIONS_KEY];
@@ -304,10 +403,25 @@ class Lovelace3DEditor extends LitElement {
   private _parseYamlArraySafe(
     yamlText: string,
     label: string,
-    errorField: "_roomsError" | "_floatersError" | "_actionsError"
+    errorField: "_roomsError" | "_floatersError" | "_heatmapsError" | "_actionsError"
   ): unknown[] | null {
     try {
       const parsed = this._parseYamlArray(yamlText, label);
+      this[errorField] = "";
+      return parsed;
+    } catch (err) {
+      this[errorField] = err instanceof Error ? err.message : String(err);
+      return null;
+    }
+  }
+
+  private _parseYamlObjectSafe(
+    yamlText: string,
+    label: string,
+    errorField: "_navbarError"
+  ): Record<string, unknown> | null {
+    try {
+      const parsed = this._parseYamlObject(yamlText, label);
       this[errorField] = "";
       return parsed;
     } catch (err) {
@@ -335,8 +449,25 @@ class Lovelace3DEditor extends LitElement {
     return parsed;
   }
 
+  private _parseYamlObject(text: string, label: string): Record<string, unknown> {
+    const clean = text.trim();
+    if (!clean) return {};
+
+    const parsed = load(clean);
+    if (parsed == null) return {};
+    if (typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(`${label} YAML must be a mapping/object.`);
+    }
+    return parsed as Record<string, unknown>;
+  }
+
   private _toYamlArray(value: unknown): string {
     if (!Array.isArray(value) || value.length === 0) return "";
+    return dump(value, { noRefs: true, lineWidth: 120 }).trim();
+  }
+
+  private _toYamlObject(value: unknown): string {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return "";
     return dump(value, { noRefs: true, lineWidth: 120 }).trim();
   }
 

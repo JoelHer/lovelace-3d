@@ -20,15 +20,186 @@ const WALL_THICKNESS = 0.08;
 const WALL_BASE_OFFSET = 0.02;
 const BOTTOM_ALPHA = 0.9;
 const TOP_ALPHA = 0.2;
-const MERGE_SCALE = 100; // 1 / scale == merge tolerance (0.01)
+const WALL_GEOMETRY_EPSILON = 1e-4;
+const EDGE_KEY_SCALE = 1000;
+const EDGE_KEY_DECIMALS = 3;
+
+type EdgeSegment = {
+  a: Vec2XZ;
+  b: Vec2XZ;
+};
+
+type CountedEdgeSegment = {
+  segment: EdgeSegment;
+  count: number;
+};
 
 const roundKey = (value: number): string =>
-  (Math.round(value * MERGE_SCALE) / MERGE_SCALE).toFixed(2);
+  (Math.round(value * EDGE_KEY_SCALE) / EDGE_KEY_SCALE).toFixed(EDGE_KEY_DECIMALS);
 
 function canonicalEdgeKey(a: Vec2XZ, b: Vec2XZ): string {
   const aKey = `${roundKey(a[0])},${roundKey(a[1])}`;
   const bKey = `${roundKey(b[0])},${roundKey(b[1])}`;
   return aKey < bKey ? `${aKey}|${bKey}` : `${bKey}|${aKey}`;
+}
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+function cross2D(ax: number, az: number, bx: number, bz: number): number {
+  return ax * bz - az * bx;
+}
+
+function segmentLengthSq(segment: EdgeSegment): number {
+  const dx = segment.b[0] - segment.a[0];
+  const dz = segment.b[1] - segment.a[1];
+  return dx * dx + dz * dz;
+}
+
+function isSegmentDegenerate(segment: EdgeSegment): boolean {
+  return segmentLengthSq(segment) <= WALL_GEOMETRY_EPSILON * WALL_GEOMETRY_EPSILON;
+}
+
+function isPointOnSegment(point: Vec2XZ, start: Vec2XZ, end: Vec2XZ): boolean {
+  const dx = end[0] - start[0];
+  const dz = end[1] - start[1];
+  const lengthSq = dx * dx + dz * dz;
+  if (lengthSq <= WALL_GEOMETRY_EPSILON * WALL_GEOMETRY_EPSILON) {
+    return false;
+  }
+
+  const pointDx = point[0] - start[0];
+  const pointDz = point[1] - start[1];
+  const distanceToLine = Math.abs(cross2D(dx, dz, pointDx, pointDz)) / Math.sqrt(lengthSq);
+  if (distanceToLine > WALL_GEOMETRY_EPSILON) {
+    return false;
+  }
+
+  const dot = pointDx * dx + pointDz * dz;
+  return dot >= -WALL_GEOMETRY_EPSILON && dot <= lengthSq + WALL_GEOMETRY_EPSILON;
+}
+
+function segmentParameter(point: Vec2XZ, start: Vec2XZ, end: Vec2XZ): number {
+  const dx = end[0] - start[0];
+  const dz = end[1] - start[1];
+
+  if (Math.abs(dx) >= Math.abs(dz)) {
+    if (Math.abs(dx) <= WALL_GEOMETRY_EPSILON) return 0;
+    return (point[0] - start[0]) / dx;
+  }
+
+  if (Math.abs(dz) <= WALL_GEOMETRY_EPSILON) return 0;
+  return (point[1] - start[1]) / dz;
+}
+
+function areCollinearSegments(first: EdgeSegment, second: EdgeSegment): boolean {
+  const firstDx = first.b[0] - first.a[0];
+  const firstDz = first.b[1] - first.a[1];
+  const secondDx = second.b[0] - second.a[0];
+  const secondDz = second.b[1] - second.a[1];
+  const firstLength = Math.hypot(firstDx, firstDz);
+  const secondLength = Math.hypot(secondDx, secondDz);
+  if (firstLength <= WALL_GEOMETRY_EPSILON || secondLength <= WALL_GEOMETRY_EPSILON) return false;
+
+  const parallelError = Math.abs(cross2D(firstDx, firstDz, secondDx, secondDz)) / (firstLength * secondLength);
+  if (parallelError > WALL_GEOMETRY_EPSILON) return false;
+
+  const pointDx = second.a[0] - first.a[0];
+  const pointDz = second.a[1] - first.a[1];
+  const offsetFromLine = Math.abs(cross2D(firstDx, firstDz, pointDx, pointDz)) / firstLength;
+  return offsetFromLine <= WALL_GEOMETRY_EPSILON;
+}
+
+function interpolatePoint(start: Vec2XZ, end: Vec2XZ, t: number): Vec2XZ {
+  const clampedT = clamp01(t);
+  return [
+    start[0] + (end[0] - start[0]) * clampedT,
+    start[1] + (end[1] - start[1]) * clampedT,
+  ] as const;
+}
+
+function pushUniqueParameter(parameters: number[], parameter: number): void {
+  const clamped = clamp01(parameter);
+  for (const existing of parameters) {
+    if (Math.abs(existing - clamped) <= WALL_GEOMETRY_EPSILON) {
+      return;
+    }
+  }
+  parameters.push(clamped);
+}
+
+function collectRoomEdgeSegments(rooms: ReadonlyArray<Room>): EdgeSegment[] {
+  const edges: EdgeSegment[] = [];
+
+  for (const room of rooms) {
+    const polygon = room.polygon;
+    if (!Array.isArray(polygon) || polygon.length < 2) continue;
+
+    for (let index = 0; index < polygon.length; index += 1) {
+      const start = polygon[index];
+      const end = polygon[(index + 1) % polygon.length];
+      if (!start || !end) continue;
+      const edge: EdgeSegment = { a: start, b: end };
+      if (isSegmentDegenerate(edge)) continue;
+      edges.push(edge);
+    }
+  }
+
+  return edges;
+}
+
+function resolveBoundaryEdgeSegments(rooms: ReadonlyArray<Room>): EdgeSegment[] {
+  const rawEdges = collectRoomEdgeSegments(rooms);
+  if (rawEdges.length === 0) return [];
+
+  const countedEdges = new Map<string, CountedEdgeSegment>();
+
+  for (const edge of rawEdges) {
+    const splitParameters: number[] = [0, 1];
+
+    for (const candidate of rawEdges) {
+      if (!areCollinearSegments(edge, candidate)) continue;
+
+      if (isPointOnSegment(candidate.a, edge.a, edge.b)) {
+        pushUniqueParameter(splitParameters, segmentParameter(candidate.a, edge.a, edge.b));
+      }
+      if (isPointOnSegment(candidate.b, edge.a, edge.b)) {
+        pushUniqueParameter(splitParameters, segmentParameter(candidate.b, edge.a, edge.b));
+      }
+    }
+
+    splitParameters.sort((left, right) => left - right);
+
+    for (let index = 0; index < splitParameters.length - 1; index += 1) {
+      const startParam = splitParameters[index];
+      const endParam = splitParameters[index + 1];
+      if (startParam === undefined || endParam === undefined) continue;
+      if (endParam - startParam <= WALL_GEOMETRY_EPSILON) continue;
+
+      const segmentStart = interpolatePoint(edge.a, edge.b, startParam);
+      const segmentEnd = interpolatePoint(edge.a, edge.b, endParam);
+      const segment: EdgeSegment = { a: segmentStart, b: segmentEnd };
+      if (isSegmentDegenerate(segment)) continue;
+
+      const key = canonicalEdgeKey(segment.a, segment.b);
+      const existing = countedEdges.get(key);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        countedEdges.set(key, { segment, count: 1 });
+      }
+    }
+  }
+
+  const boundarySegments: EdgeSegment[] = [];
+  for (const edge of countedEdges.values()) {
+    // Shared overlaps appear at least twice and should not produce visible walls.
+    if (edge.count % 2 === 0) continue;
+    boundarySegments.push(edge.segment);
+  }
+
+  return boundarySegments;
 }
 
 function createWallMesh(
@@ -141,24 +312,8 @@ export function createWallGroup(
   const wallMaterial = material ?? createWallMaterial(viewDirUniform);
   const group = new Group();
 
-  const edges = new Map<string, { a: Vec2XZ; b: Vec2XZ }>();
-  for (const room of rooms) {
-    const polygon = room.polygon;
-    if (!Array.isArray(polygon) || polygon.length < 2) continue;
-
-    for (let index = 0; index < polygon.length; index += 1) {
-      const a = polygon[index];
-      const b = polygon[(index + 1) % polygon.length];
-      if (!a || !b) continue;
-      const key = canonicalEdgeKey(a, b);
-      if (!edges.has(key)) {
-        edges.set(key, { a, b });
-      }
-    }
-  }
-
-  for (const edge of edges.values()) {
-    const mesh = createWallMesh(edge.a, edge.b, WALL_HEIGHT, WALL_THICKNESS, wallMaterial);
+  for (const segment of resolveBoundaryEdgeSegments(rooms)) {
+    const mesh = createWallMesh(segment.a, segment.b, WALL_HEIGHT, WALL_THICKNESS, wallMaterial);
     if (mesh) {
       group.add(mesh);
     }
