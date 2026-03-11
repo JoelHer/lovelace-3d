@@ -11,6 +11,7 @@ export type FloaterConfig = {
   entityId: string;
   label: string;
   icon: string;
+  group: string;
   point: FloaterPoint;
   tapAction: FloaterAction;
   holdAction: FloaterAction;
@@ -71,6 +72,14 @@ function parseFloaterAction(rawValue: unknown, fallback: FloaterAction): Floater
   return fallback;
 }
 
+function parseFloaterGroup(rawValue: unknown, fallbackEntityId: string): string {
+  const explicit = String(rawValue ?? "").trim().toLowerCase();
+  if (explicit) return explicit;
+
+  const domain = fallbackEntityId.split(".", 1)[0]?.trim().toLowerCase() ?? "";
+  return domain || "default";
+}
+
 export function parseFloaters(rawFloaters: unknown): FloaterConfig[] {
   if (!Array.isArray(rawFloaters)) return [];
 
@@ -104,12 +113,14 @@ export function parseFloaters(rawFloaters: unknown): FloaterConfig[] {
     const id = String(floater.id ?? `${entityId}-${index + 1}`);
     const label = String(floater.label ?? floater.name ?? entityId);
     const icon = String(floater.icon ?? "").trim() || defaultIconForEntity(entityId);
+    const group = parseFloaterGroup(floater.group ?? floater.category, entityId);
 
     parsed.push({
       id,
       entityId,
       label,
       icon,
+      group,
       point,
       tapAction,
       holdAction,
@@ -123,7 +134,7 @@ export function createFloatersSignature(floaters: ReadonlyArray<FloaterConfig>):
   return floaters
     .map(
       (floater) =>
-        `${floater.id}|${floater.entityId}|${floater.icon}|${floater.tapAction}|${floater.holdAction}|${floater.point.x.toFixed(4)},${floater.point.y.toFixed(4)},${floater.point.z.toFixed(4)}`
+        `${floater.id}|${floater.entityId}|${floater.icon}|${floater.group}|${floater.tapAction}|${floater.holdAction}|${floater.point.x.toFixed(4)},${floater.point.y.toFixed(4)},${floater.point.z.toFixed(4)}`
     )
     .join("||");
 }

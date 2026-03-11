@@ -32,10 +32,51 @@ floaters:
   - id: kitchen-light
     entity: light.kitchen
     icon: mdi:lightbulb
+    group: light
     position: [2, 1.2, 1.5] # x, y, z in the same world-space as room polygons
     tap_action: toggle # toggle | more-info | popup
     hold_action: popup # toggle | more-info | popup
+heatmaps:
+  enabled: true
+  sensors:
+    - entity: sensor.kitchen_temperature
+      position: [2, 1.2, 1.5]
+    - entity: sensor.living_temperature
+      position: [5, 1.2, 2.2]
+  # Optional fixed range. If omitted, range is auto-derived from sensors.
+  min: 16
+  max: 28
+  # Configure what is cold/warm/hot.
+  color_ranges:
+    - value: 16
+      color: "#1652f6"
+    - value: 20
+      color: "#16bbff"
+    - value: 23
+      color: "#49db78"
+    - value: 25
+      color: "#ffd646"
+    - value: 28
+      color: "#fa4a30"
+navbar:
+  items:
+    - action: toggle-heatmap
+      label: Heatmap
+      icon: mdi:thermometer
+    - action: set-floater-group
+      floater_group: light
+      label: Lights
+      icon: mdi:lightbulb-group
+    - action: set-floater-group
+      floater_group: all
+      label: All
+      icon: mdi:view-grid
 ```
+
+`heatmaps.color_ranges` accepts both object and tuple forms:
+
+- `{ value: 22, color: "#49db78" }`
+- `[22, "#49db78"]`
 
 Supported template tokens in popup actions:
 

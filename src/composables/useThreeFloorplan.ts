@@ -50,10 +50,18 @@ export type HeatmapSample = {
   weight: number;
 };
 
+export type HeatmapColorStop = {
+  position: number;
+  r: number;
+  g: number;
+  b: number;
+};
+
 export type HeatmapRenderData = {
   samples: HeatmapSample[];
   minValue: number;
   maxValue: number;
+  colorStops: HeatmapColorStop[] | null;
   opacity: number;
   resolution: number;
   blur: number;
@@ -137,17 +145,12 @@ const HEATMAP_NEIGHBORS = [
   [-1, 1],
   [1, 1],
 ] as const;
-const HEATMAP_COLOR_STOPS: ReadonlyArray<{
-  t: number;
-  r: number;
-  g: number;
-  b: number;
-}> = [
-  { t: 0, r: 22, g: 82, b: 246 },
-  { t: 0.3, r: 22, g: 187, b: 255 },
-  { t: 0.55, r: 73, g: 219, b: 120 },
-  { t: 0.78, r: 255, g: 214, b: 70 },
-  { t: 1, r: 250, g: 74, b: 48 },
+const DEFAULT_HEATMAP_COLOR_STOPS: ReadonlyArray<HeatmapColorStop> = [
+  { position: 0, r: 22, g: 82, b: 246 },
+  { position: 0.3, r: 22, g: 187, b: 255 },
+  { position: 0.55, r: 73, g: 219, b: 120 },
+  { position: 0.78, r: 255, g: 214, b: 70 },
+  { position: 1, r: 250, g: 74, b: 48 },
 ];
 const projectedWorldPoint = new Vector3();
 const cameraSpacePoint = new Vector3();
@@ -193,24 +196,84 @@ function computeHeatmapBounds(rooms: ReadonlyArray<Room>): HeatmapBounds | null 
   };
 }
 
-function sampleHeatmapColor(t: number): [number, number, number] {
+function resolveHeatmapColorStops(colorStops: HeatmapColorStop[] | null): ReadonlyArray<HeatmapColorStop> {
+  if (!Array.isArray(colorStops) || colorStops.length < 2) {
+    return DEFAULT_HEATMAP_COLOR_STOPS;
+  }
+
+  const normalized = colorStops
+    .map((stop) => {
+      const position = Number(stop.position);
+      const r = Number(stop.r);
+      const g = Number(stop.g);
+      const b = Number(stop.b);
+      if (!Number.isFinite(position) || !Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) {
+        return null;
+      }
+
+      return {
+        position: clamp(position, 0, 1),
+        r: Math.round(clamp(r, 0, 255)),
+        g: Math.round(clamp(g, 0, 255)),
+        b: Math.round(clamp(b, 0, 255)),
+      };
+    })
+    .filter((stop): stop is HeatmapColorStop => stop !== null)
+    .sort((left, right) => left.position - right.position);
+
+  if (normalized.length < 2) {
+    return DEFAULT_HEATMAP_COLOR_STOPS;
+  }
+
+  const deduped: HeatmapColorStop[] = [];
+  for (const stop of normalized) {
+    const last = deduped[deduped.length - 1];
+    if (last && Math.abs(last.position - stop.position) <= HEATMAP_EPSILON) {
+      deduped[deduped.length - 1] = stop;
+      continue;
+    }
+    deduped.push(stop);
+  }
+
+  if (deduped.length < 2) {
+    return DEFAULT_HEATMAP_COLOR_STOPS;
+  }
+
+  const first = deduped[0];
+  const last = deduped[deduped.length - 1];
+  if (!first || !last) {
+    return DEFAULT_HEATMAP_COLOR_STOPS;
+  }
+
+  const bounded = [...deduped];
+  if (first.position > 0) {
+    bounded.unshift({ ...first, position: 0 });
+  }
+  if (last.position < 1) {
+    bounded.push({ ...last, position: 1 });
+  }
+
+  return bounded;
+}
+
+function sampleHeatmapColor(t: number, colorStops: ReadonlyArray<HeatmapColorStop>): [number, number, number] {
   const clamped = clamp(t, 0, 1);
 
-  for (let index = 1; index < HEATMAP_COLOR_STOPS.length; index += 1) {
-    const current = HEATMAP_COLOR_STOPS[index];
-    const previous = HEATMAP_COLOR_STOPS[index - 1];
+  for (let index = 1; index < colorStops.length; index += 1) {
+    const current = colorStops[index];
+    const previous = colorStops[index - 1];
     if (!current || !previous) continue;
-    if (clamped > current.t) continue;
+    if (clamped > current.position) continue;
 
-    const span = Math.max(HEATMAP_EPSILON, current.t - previous.t);
-    const mix = (clamped - previous.t) / span;
+    const span = Math.max(HEATMAP_EPSILON, current.position - previous.position);
+    const mix = (clamped - previous.position) / span;
     const r = Math.round(previous.r + (current.r - previous.r) * mix);
     const g = Math.round(previous.g + (current.g - previous.g) * mix);
     const b = Math.round(previous.b + (current.b - previous.b) * mix);
     return [r, g, b];
   }
 
-  const lastStop = HEATMAP_COLOR_STOPS[HEATMAP_COLOR_STOPS.length - 1];
+  const lastStop = colorStops[colorStops.length - 1];
   if (!lastStop) return [255, 64, 64];
   return [lastStop.r, lastStop.g, lastStop.b];
 }
@@ -680,6 +743,7 @@ function drawHeatmapTexture(state: FloorplanState, data: HeatmapRenderData): voi
   const minValue = Math.min(data.minValue, data.maxValue);
   const maxValue = Math.max(data.minValue, data.maxValue);
   const valueRange = Math.max(HEATMAP_EPSILON, maxValue - minValue);
+  const colorStops = resolveHeatmapColorStops(data.colorStops);
   const opacity = clamp(data.opacity, 0, 1);
   const smoothness = clamp(data.blur, 0, 1);
   const influencePower = 1.2 + (1 - smoothness) * 1.3;
@@ -765,7 +829,7 @@ function drawHeatmapTexture(state: FloorplanState, data: HeatmapRenderData): voi
 
     const value = weightedValueSum / weightSum;
     const normalizedValue = clamp((value - minValue) / valueRange, 0, 1);
-    const [r, g, b] = sampleHeatmapColor(normalizedValue);
+    const [r, g, b] = sampleHeatmapColor(normalizedValue, colorStops);
     const confidenceAlpha = clamp(1 - Math.exp(-strongestInfluence * alphaScale), 0, 1);
     const alpha = Math.round(clamp(opacity * (0.45 + confidenceAlpha * 0.55), 0, 1) * 255);
 

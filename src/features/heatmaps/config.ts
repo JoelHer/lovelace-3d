@@ -14,12 +14,18 @@ export type HeatmapSensorConfig = {
   valueAttribute: string | null;
 };
 
+export type HeatmapColorRangeConfig = {
+  value: number;
+  color: string;
+};
+
 export type HeatmapConfig = {
   enabled: boolean;
   defaultVisible: boolean;
   sensors: HeatmapSensorConfig[];
   minValue: number | null;
   maxValue: number | null;
+  colorRanges: HeatmapColorRangeConfig[];
   opacity: number;
   resolution: number;
   blur: number;
@@ -107,6 +113,37 @@ function parseSensors(rawSensors: unknown, defaults: HeatmapGlobalDefaults): Hea
   return parsed;
 }
 
+function parseColorRanges(rawRanges: unknown): HeatmapColorRangeConfig[] {
+  if (!Array.isArray(rawRanges)) return [];
+
+  const parsed: HeatmapColorRangeConfig[] = [];
+
+  for (const rawRange of rawRanges) {
+    if (Array.isArray(rawRange) && rawRange.length >= 2) {
+      const value = asFinite(rawRange[0]);
+      const color = String(rawRange[1] ?? "").trim();
+      if (value === null || !color) continue;
+      parsed.push({ value, color });
+      continue;
+    }
+
+    if (!rawRange || typeof rawRange !== "object") continue;
+    const range = rawRange as Record<string, unknown>;
+    const value = asFinite(range.value ?? range.at ?? range.temperature ?? range.temp);
+    const color = String(range.color ?? range.colour ?? "").trim();
+    if (value === null || !color) continue;
+    parsed.push({ value, color });
+  }
+
+  // Keep one range per threshold value (last one wins) and sort by value.
+  const deduped = new Map<string, HeatmapColorRangeConfig>();
+  for (const range of parsed) {
+    deduped.set(range.value.toFixed(6), range);
+  }
+
+  return [...deduped.values()].sort((left, right) => left.value - right.value);
+}
+
 export function parseHeatmapConfig(rawHeatmaps: unknown): HeatmapConfig {
   const source =
     rawHeatmaps && typeof rawHeatmaps === "object" && !Array.isArray(rawHeatmaps)
@@ -127,6 +164,9 @@ export function parseHeatmapConfig(rawHeatmaps: unknown): HeatmapConfig {
   const parsedMax = asFinite(source?.max ?? source?.max_value);
   const minValue = parsedMin !== null ? parsedMin : null;
   const maxValue = parsedMax !== null ? parsedMax : null;
+  const colorRanges = parseColorRanges(
+    source?.color_ranges ?? source?.color_stops ?? source?.ranges ?? source?.temperature_ranges
+  );
 
   const parsedOpacity = asFinite(source?.opacity);
   const parsedResolution = asFinite(source?.resolution);
@@ -138,6 +178,7 @@ export function parseHeatmapConfig(rawHeatmaps: unknown): HeatmapConfig {
     sensors,
     minValue,
     maxValue,
+    colorRanges,
     opacity: clamp(parsedOpacity ?? DEFAULT_OPACITY, 0.05, 1),
     resolution: Math.round(clamp(parsedResolution ?? DEFAULT_RESOLUTION, 96, 384)),
     blur: clamp(parsedBlur ?? DEFAULT_BLUR, 0, 1),
@@ -150,6 +191,7 @@ export function createHeatmapSignature(config: HeatmapConfig): string {
     `visible:${config.defaultVisible}`,
     `min:${config.minValue === null ? "auto" : config.minValue.toFixed(4)}`,
     `max:${config.maxValue === null ? "auto" : config.maxValue.toFixed(4)}`,
+    config.colorRanges.map((range) => `${range.value.toFixed(4)}:${range.color}`).join("||"),
     `opacity:${config.opacity.toFixed(4)}`,
     `resolution:${config.resolution}`,
     `blur:${config.blur.toFixed(4)}`,

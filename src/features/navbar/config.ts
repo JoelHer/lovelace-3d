@@ -1,11 +1,12 @@
 export type NavbarPosition = "left" | "right" | "top" | "bottom";
-export type NavbarAction = "toggle-heatmap";
+export type NavbarAction = "toggle-heatmap" | "set-floater-group";
 
 export type NavbarItemConfig = {
   id: string;
   label: string;
   icon: string;
   action: NavbarAction;
+  floaterGroup: string | null;
 };
 
 export type NavbarConfig = {
@@ -29,6 +30,7 @@ const DEFAULT_ITEMS: NavbarItemConfig[] = [
     label: "Heatmap",
     icon: "mdi:thermometer",
     action: "toggle-heatmap",
+    floaterGroup: null,
   },
 ];
 
@@ -52,6 +54,7 @@ function parseNavbarPosition(rawValue: unknown): NavbarPosition {
 function parseNavbarAction(rawValue: unknown): NavbarAction | null {
   const normalized = String(rawValue ?? "").trim().toLowerCase().replace(/_/g, "-");
   if (normalized === "toggle-heatmap") return "toggle-heatmap";
+  if (normalized === "set-floater-group") return "set-floater-group";
   return null;
 }
 
@@ -69,11 +72,26 @@ function parseNavbarItems(rawItems: unknown): NavbarItemConfig[] {
     const action = parseNavbarAction(item.action ?? item.type);
     if (!action) continue;
 
+    const parsedGroup = String(item.floater_group ?? item.group ?? item.target ?? "").trim().toLowerCase();
+    const floaterGroup =
+      action === "set-floater-group" ? (parsedGroup || "all") : null;
+
     parsed.push({
       id: String(item.id ?? `${action}-${index + 1}`),
-      label: String(item.label ?? item.name ?? "Heatmap"),
-      icon: String(item.icon ?? "mdi:thermometer").trim() || "mdi:thermometer",
+      label: String(
+        item.label ??
+          item.name ??
+          (action === "set-floater-group"
+            ? floaterGroup === "all"
+              ? "All"
+              : floaterGroup
+            : "Heatmap")
+      ),
+      icon:
+        String(item.icon ?? (action === "set-floater-group" ? "mdi:lightbulb-group" : "mdi:thermometer"))
+          .trim() || (action === "set-floater-group" ? "mdi:lightbulb-group" : "mdi:thermometer"),
       action,
+      floaterGroup,
     });
   }
 
@@ -123,6 +141,8 @@ export function createNavbarSignature(config: NavbarConfig): string {
     `text:${config.textColor ?? "default"}`,
     `icon:${config.iconColor ?? "default"}`,
     `offset:${config.offsetX},${config.offsetY}`,
-    config.items.map((item) => `${item.id}|${item.label}|${item.icon}|${item.action}`).join("||"),
+    config.items
+      .map((item) => `${item.id}|${item.label}|${item.icon}|${item.action}|${item.floaterGroup ?? ""}`)
+      .join("||"),
   ].join("|");
 }

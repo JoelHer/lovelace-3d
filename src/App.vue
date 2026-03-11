@@ -27,6 +27,7 @@
               :is-active="button.isActive"
               :is-group="button.isGroup"
               :group-count="button.groupCount"
+              :value-text="button.valueText"
               @press="onFloaterButtonPressed(button)"
               @long-press="onFloaterButtonLongPressed(button)"
             />
@@ -162,7 +163,9 @@ const expandedFloaterGroupId = ref<string | null>(null);
 const floaterGroupExpansionAnimation = ref<{ groupId: string; startedAtMs: number } | null>(null);
 const floaterGroupExpansionProgress = ref(1);
 const floaterScreenById = ref<Record<string, { x: number; y: number; visible: boolean }>>({});
+const heatmapSensorScreenById = ref<Record<string, { x: number; y: number; visible: boolean }>>({});
 const heatmapVisible = ref(true);
+const activeFloaterGroup = ref("all");
 let heatmapVisibilityInitialized = false;
 let unsubscribeFloaterFrame: (() => void) | null = null;
 
@@ -234,6 +237,9 @@ type RenderedFloater = {
   y: number;
   isOn: boolean;
   accentColor: string | null;
+  floaterId: string | null;
+  sensorEntityId: string | null;
+  valueText: string | null;
 };
 
 type FloaterGroup = {
@@ -255,13 +261,24 @@ type FloaterButtonRender = {
   isGroup: boolean;
   groupCount: number | null;
   floaterId: string | null;
+  sensorEntityId: string | null;
   groupId: string | null;
+  valueText: string | null;
 };
 
 type ResolvedHeatmapSensor = {
+  id: string;
+  entityId: string;
+  label: string;
+  point: {
+    x: number;
+    y: number;
+    z: number;
+  };
   x: number;
   z: number;
   value: number;
+  unit: string;
   radius: number;
   weight: number;
 };
@@ -347,6 +364,75 @@ function parseNumericText(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+function parseHexColor(value: string): [number, number, number] | null {
+  const normalized = value.trim().replace(/^#/, "");
+  if (!normalized) return null;
+
+  if (normalized.length === 3 || normalized.length === 4) {
+    const c0 = normalized.charAt(0);
+    const c1 = normalized.charAt(1);
+    const c2 = normalized.charAt(2);
+    if (!c0 || !c1 || !c2) return null;
+    const r = Number.parseInt(c0 + c0, 16);
+    const g = Number.parseInt(c1 + c1, 16);
+    const b = Number.parseInt(c2 + c2, 16);
+    if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) return [r, g, b];
+    return null;
+  }
+
+  if (normalized.length === 6 || normalized.length === 8) {
+    const r = Number.parseInt(normalized.slice(0, 2), 16);
+    const g = Number.parseInt(normalized.slice(2, 4), 16);
+    const b = Number.parseInt(normalized.slice(4, 6), 16);
+    if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) return [r, g, b];
+    return null;
+  }
+
+  return null;
+}
+
+function parseRgbColor(value: string): [number, number, number] | null {
+  const match = value.trim().match(/^rgba?\((.+)\)$/i);
+  if (!match) return null;
+  const body = match[1];
+  if (!body) return null;
+  const channels = body.split(",").map((part) => part.trim());
+  if (channels.length < 3) return null;
+
+  const rgb: number[] = [];
+  for (let index = 0; index < 3; index += 1) {
+    const channel = channels[index];
+    if (!channel) return null;
+    if (channel.endsWith("%")) {
+      const percent = Number.parseFloat(channel.slice(0, -1));
+      if (!Number.isFinite(percent)) return null;
+      rgb.push(Math.round(clamp01(percent / 100) * 255));
+      continue;
+    }
+
+    const numeric = Number.parseFloat(channel);
+    if (!Number.isFinite(numeric)) return null;
+    rgb.push(Math.round(Math.min(255, Math.max(0, numeric))));
+  }
+
+  const [r, g, b] = rgb;
+  if (r === undefined || g === undefined || b === undefined) return null;
+  return [r, g, b];
+}
+
+function parseHeatmapRangeColor(value: string): [number, number, number] | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("#")) {
+    return parseHexColor(trimmed);
+  }
+  return parseRgbColor(trimmed);
+}
+
 function resolveHeatmapSensorValue(
   sensor: HeatmapConfig["sensors"][number],
   entityState: HassEntityState | undefined
@@ -365,32 +451,52 @@ function resolveHeatmapSensorValue(
   return parseNumericText(String(entityState.state ?? ""));
 }
 
-const heatmapRenderData = computed<HeatmapRenderData | null>(() => {
+function formatHeatmapSensorValue(value: number, unit: string): string {
+  const decimals = Math.abs(value) >= 100 ? 0 : Math.abs(value) >= 10 ? 1 : 2;
+  const rounded = value.toFixed(decimals);
+  return unit ? `${rounded} ${unit}` : rounded;
+}
+
+const resolvedHeatmapSensors = computed<ResolvedHeatmapSensor[]>(() => {
   const config = heatmapConfig.value;
-  if (!config.enabled || config.sensors.length === 0) return null;
+  if (!config.enabled || config.sensors.length === 0) return [];
 
-  const sensors: ResolvedHeatmapSensor[] = [];
-  let observedMin = Number.POSITIVE_INFINITY;
-  let observedMax = Number.NEGATIVE_INFINITY;
-
+  const resolved: ResolvedHeatmapSensor[] = [];
   for (const sensor of config.sensors) {
     const entityState = hass.value?.states?.[sensor.entityId] as HassEntityState | undefined;
     const value = resolveHeatmapSensorValue(sensor, entityState);
     if (value === null) continue;
 
-    sensors.push({
+    const unit = String(entityState?.attributes?.unit_of_measurement ?? "").trim();
+    resolved.push({
+      id: sensor.id,
+      entityId: sensor.entityId,
+      label: sensor.label,
+      point: sensor.point,
       x: sensor.point.x,
       z: sensor.point.z,
       value,
+      unit,
       radius: sensor.radius,
       weight: sensor.weight,
     });
-
-    if (value < observedMin) observedMin = value;
-    if (value > observedMax) observedMax = value;
   }
 
+  return resolved;
+});
+
+const heatmapRenderData = computed<HeatmapRenderData | null>(() => {
+  const sensors = resolvedHeatmapSensors.value;
   if (sensors.length === 0) return null;
+
+  const config = heatmapConfig.value;
+  let observedMin = Number.POSITIVE_INFINITY;
+  let observedMax = Number.NEGATIVE_INFINITY;
+
+  for (const sensor of sensors) {
+    if (sensor.value < observedMin) observedMin = sensor.value;
+    if (sensor.value > observedMax) observedMax = sensor.value;
+  }
 
   let minValue = config.minValue ?? observedMin;
   let maxValue = config.maxValue ?? observedMax;
@@ -409,16 +515,44 @@ const heatmapRenderData = computed<HeatmapRenderData | null>(() => {
     maxValue = minValue + 1;
   }
 
+  const range = Math.max(0.0001, maxValue - minValue);
+  const configuredColorStops = config.colorRanges
+    .map((colorRange) => {
+      const rgb = parseHeatmapRangeColor(colorRange.color);
+      if (!rgb) return null;
+
+      const [r, g, b] = rgb;
+      return {
+        position: clamp01((colorRange.value - minValue) / range),
+        r,
+        g,
+        b,
+      };
+    })
+    .filter((stop): stop is { position: number; r: number; g: number; b: number } => stop !== null)
+    .sort((left, right) => left.position - right.position);
+
   return {
-    samples: sensors,
+    samples: sensors.map((sensor) => ({
+      x: sensor.x,
+      z: sensor.z,
+      value: sensor.value,
+      radius: sensor.radius,
+      weight: sensor.weight,
+    })),
     minValue,
     maxValue,
+    colorStops: configuredColorStops.length >= 2 ? configuredColorStops : null,
     opacity: config.opacity,
     resolution: config.resolution,
     blur: config.blur,
     visible: heatmapVisible.value,
   };
 });
+
+const isHeatmapFloaterMode = computed(
+  () => !!heatmapRenderData.value && heatmapVisible.value
+);
 
 const renderedNavbarItems = computed<NavbarItemConfig[]>(() => {
   const config = navbarConfig.value;
@@ -427,6 +561,13 @@ const renderedNavbarItems = computed<NavbarItemConfig[]>(() => {
   const hasHeatmap = heatmapConfig.value.enabled && heatmapConfig.value.sensors.length > 0;
   return config.items.filter((item) => {
     if (item.action === "toggle-heatmap") return hasHeatmap;
+    if (item.action === "set-floater-group") {
+      const targetGroup = item.floaterGroup ?? "all";
+      return (
+        targetGroup === "all" ||
+        floaters.value.some((floater) => floater.group === targetGroup)
+      );
+    }
     return true;
   });
 });
@@ -458,12 +599,29 @@ function isNavbarItemActive(item: NavbarItemConfig): boolean {
   if (item.action === "toggle-heatmap") {
     return !!heatmapRenderData.value && heatmapVisible.value;
   }
+  if (item.action === "set-floater-group") {
+    return activeFloaterGroup.value === (item.floaterGroup ?? "all");
+  }
   return false;
 }
 
 function onNavbarItemPressed(item: NavbarItemConfig) {
   if (item.action === "toggle-heatmap") {
     heatmapVisible.value = !heatmapVisible.value;
+    if (heatmapVisible.value) {
+      closeFloaterPopup();
+      closeFloaterGroup();
+    }
+    return;
+  }
+
+  if (item.action === "set-floater-group") {
+    activeFloaterGroup.value = item.floaterGroup ?? "all";
+    if (heatmapVisible.value) {
+      heatmapVisible.value = false;
+    }
+    closeFloaterPopup();
+    closeFloaterGroup();
   }
 }
 
@@ -591,10 +749,16 @@ function resolveGroupExpansionProgress(groupId: string): number {
   return easeOutCubic(floaterGroupExpansionProgress.value);
 }
 
-const renderedFloaters = computed<RenderedFloater[]>(() => {
+const filteredFloaters = computed<FloaterConfig[]>(() => {
+  if (isHeatmapFloaterMode.value) return [];
+  if (activeFloaterGroup.value === "all") return floaters.value;
+  return floaters.value.filter((floater) => floater.group === activeFloaterGroup.value);
+});
+
+const renderedEntityFloaters = computed<RenderedFloater[]>(() => {
   const rendered: RenderedFloater[] = [];
 
-  for (const floater of floaters.value) {
+  for (const floater of filteredFloaters.value) {
     const projection = floaterScreenById.value[floater.id];
     if (!projection || !projection.visible) continue;
 
@@ -611,13 +775,55 @@ const renderedFloaters = computed<RenderedFloater[]>(() => {
       y: projection.y,
       isOn,
       accentColor,
+      floaterId: floater.id,
+      sensorEntityId: null,
+      valueText: null,
     });
   }
 
   return rendered;
 });
 
-const floaterGroups = computed<FloaterGroup[]>(() => collectFloaterGroups(renderedFloaters.value));
+const renderedHeatmapSensorFloaters = computed<RenderedFloater[]>(() => {
+  if (!isHeatmapFloaterMode.value) return [];
+
+  const rendered: RenderedFloater[] = [];
+  for (const sensor of resolvedHeatmapSensors.value) {
+    const projection = heatmapSensorScreenById.value[sensor.id];
+    if (!projection || !projection.visible) continue;
+
+    rendered.push({
+      id: `heatmap-sensor-${sensor.id}`,
+      label: sensor.label || sensor.entityId,
+      icon: "mdi:thermometer",
+      x: projection.x,
+      y: projection.y,
+      isOn: false,
+      accentColor: null,
+      floaterId: null,
+      sensorEntityId: sensor.entityId,
+      valueText: formatHeatmapSensorValue(sensor.value, sensor.unit),
+    });
+  }
+
+  return rendered;
+});
+
+const renderedFloaters = computed<RenderedFloater[]>(() =>
+  isHeatmapFloaterMode.value ? renderedHeatmapSensorFloaters.value : renderedEntityFloaters.value
+);
+
+const floaterGroups = computed<FloaterGroup[]>(() => {
+  if (isHeatmapFloaterMode.value) {
+    return renderedFloaters.value.map((item) => ({
+      id: item.id,
+      x: item.x,
+      y: item.y,
+      items: [item],
+    }));
+  }
+  return collectFloaterGroups(renderedFloaters.value);
+});
 
 const renderedFloaterButtons = computed<FloaterButtonRender[]>(() => {
   const buttons: FloaterButtonRender[] = [];
@@ -634,18 +840,22 @@ const renderedFloaterButtons = computed<FloaterButtonRender[]>(() => {
         label: item.label,
         isOn: item.isOn,
         accentColor: item.accentColor,
-        isActive: floaterPopupId.value === item.id,
+        isActive: !!item.floaterId && floaterPopupId.value === item.floaterId,
         isGroup: false,
         groupCount: null,
-        floaterId: item.id,
+        floaterId: item.floaterId,
+        sensorEntityId: item.sensorEntityId,
         groupId: null,
+        valueText: item.valueText,
       });
       continue;
     }
 
     const isExpanded = expandedFloaterGroupId.value === group.id;
     const expansionProgress = resolveGroupExpansionProgress(group.id);
-    const hasActiveFloater = group.items.some((item) => floaterPopupId.value === item.id);
+    const hasActiveFloater = group.items.some(
+      (item) => !!item.floaterId && floaterPopupId.value === item.floaterId
+    );
 
     if (!isExpanded) {
       buttons.push({
@@ -660,7 +870,9 @@ const renderedFloaterButtons = computed<FloaterButtonRender[]>(() => {
         isGroup: true,
         groupCount: group.items.length,
         floaterId: null,
+        sensorEntityId: null,
         groupId: group.id,
+        valueText: null,
       });
       continue;
     }
@@ -677,7 +889,9 @@ const renderedFloaterButtons = computed<FloaterButtonRender[]>(() => {
       isGroup: true,
       groupCount: group.items.length,
       floaterId: null,
+      sensorEntityId: null,
       groupId: group.id,
+      valueText: null,
     });
 
     const radius = resolveGroupRadius(group.items.length);
@@ -694,11 +908,13 @@ const renderedFloaterButtons = computed<FloaterButtonRender[]>(() => {
         label: item.label,
         isOn: item.isOn,
         accentColor: item.accentColor,
-        isActive: floaterPopupId.value === item.id,
+        isActive: !!item.floaterId && floaterPopupId.value === item.floaterId,
         isGroup: false,
         groupCount: null,
-        floaterId: item.id,
+        floaterId: item.floaterId,
+        sensorEntityId: item.sensorEntityId,
         groupId: null,
+        valueText: item.valueText,
       });
     });
   }
@@ -792,13 +1008,27 @@ function onFloaterButtonPressed(button: FloaterButtonRender) {
     return;
   }
 
-  if (!button.floaterId) return;
-  void onFloaterPressed(button.floaterId);
+  if (button.floaterId) {
+    void onFloaterPressed(button.floaterId);
+    return;
+  }
+
+  if (button.sensorEntityId) {
+    openEntityControlDialog(button.sensorEntityId);
+  }
 }
 
 function onFloaterButtonLongPressed(button: FloaterButtonRender) {
-  if (button.groupId || !button.floaterId) return;
-  void onFloaterLongPressed(button.floaterId);
+  if (button.groupId) return;
+
+  if (button.floaterId) {
+    void onFloaterLongPressed(button.floaterId);
+    return;
+  }
+
+  if (button.sensorEntityId) {
+    openEntityControlDialog(button.sensorEntityId);
+  }
 }
 
 async function onFloaterPressed(floaterId: string) {
@@ -939,16 +1169,28 @@ function updateFloaterProjections() {
     if (Object.keys(floaterScreenById.value).length > 0) {
       floaterScreenById.value = {};
     }
+    if (Object.keys(heatmapSensorScreenById.value).length > 0) {
+      heatmapSensorScreenById.value = {};
+    }
   } else {
-    const next: Record<string, { x: number; y: number; visible: boolean }> = {};
+    const nextFloaters: Record<string, { x: number; y: number; visible: boolean }> = {};
 
     for (const floater of floaters.value) {
       const projection = three.projectWorldPoint(floater.point.x, floater.point.y, floater.point.z);
       if (!projection) continue;
-      next[floater.id] = projection;
+      nextFloaters[floater.id] = projection;
     }
 
-    floaterScreenById.value = next;
+    floaterScreenById.value = nextFloaters;
+
+    const nextHeatmapSensors: Record<string, { x: number; y: number; visible: boolean }> = {};
+    for (const sensor of heatmapConfig.value.sensors) {
+      const projection = three.projectWorldPoint(sensor.point.x, sensor.point.y, sensor.point.z);
+      if (!projection) continue;
+      nextHeatmapSensors[sensor.id] = projection;
+    }
+
+    heatmapSensorScreenById.value = nextHeatmapSensors;
   }
 }
 
@@ -998,9 +1240,23 @@ watch(floatersSignature, () => {
   closeFloaterGroup();
   updateFloaterProjections();
 
+  if (activeFloaterGroup.value !== "all") {
+    const hasGroup = floaters.value.some((floater) => floater.group === activeFloaterGroup.value);
+    if (!hasGroup) {
+      activeFloaterGroup.value = "all";
+    }
+  }
+
   if (!floaterPopupId.value) return;
   if (!floatersById.value[floaterPopupId.value]) {
     closeFloaterPopup();
+  }
+});
+
+watch(isHeatmapFloaterMode, (enabled) => {
+  if (enabled) {
+    closeFloaterPopup();
+    closeFloaterGroup();
   }
 });
 

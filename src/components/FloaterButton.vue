@@ -1,7 +1,7 @@
 <template>
   <button
     class="floater-btn"
-    :class="{ active: !!isActive, on: !!isOn, group: !!isGroup }"
+    :class="{ active: !!isActive, on: !!isOn, group: !!isGroup, value: !!valueText }"
     :style="buttonStyle"
     type="button"
     :aria-label="label"
@@ -14,6 +14,7 @@
     @contextmenu.prevent
   >
     <ha-icon class="floater-icon" :icon="icon" />
+    <span v-if="valueText" class="floater-value">{{ valueText }}</span>
     <span v-if="groupCount && groupCount > 1" class="floater-count" aria-hidden="true">
       {{ groupCount }}
     </span>
@@ -35,6 +36,7 @@ const props = defineProps<{
   isGroup?: boolean;
   groupCount?: number | null;
   accentColor?: string | null;
+  valueText?: string | null;
 }>();
 
 const emit = defineEmits<{

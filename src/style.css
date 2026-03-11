@@ -185,6 +185,18 @@
   pointer-events: auto;
 }
 
+.floater-btn.value {
+  width: auto;
+  min-width: 66px;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
 .floater-btn.group {
   border-color: color-mix(in srgb, var(--primary-color) 80%, transparent);
   background: color-mix(in srgb, var(--card-background-color) 18%, var(--primary-color) 82%);
@@ -211,6 +223,16 @@
 
 .floater-btn .floater-icon {
   --mdc-icon-size: 20px;
+}
+
+.floater-btn.value .floater-icon {
+  --mdc-icon-size: 16px;
+}
+
+.floater-btn .floater-value {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .floater-btn .floater-count {

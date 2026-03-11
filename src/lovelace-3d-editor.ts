@@ -171,7 +171,8 @@ class Lovelace3DEditor extends LitElement {
             <div class="help">
               Configure 2D floating buttons anchored to 3D points. Each item needs <code>entity</code> and
               <code>position: [x, y, z]</code>. Use <code>tap_action</code>/<code>hold_action</code>:
-              <code>toggle</code>, <code>more-info</code>, or <code>popup</code>.
+              <code>toggle</code>, <code>more-info</code>, or <code>popup</code>. Optional:
+              <code>group</code> (for navbar group filtering, e.g. <code>light</code>).
             </div>
             ${this._floatersError ? html`<div class="error">${this._floatersError}</div>` : nothing}
           </div>
@@ -188,7 +189,8 @@ class Lovelace3DEditor extends LitElement {
             ></ha-code-editor>
             <div class="help">
               Configure heatmap sensors with <code>entity</code> and <code>position: [x, y, z]</code>. Optional:
-              <code>radius</code>, <code>weight</code>, and <code>value_attribute</code>.
+              <code>radius</code>, <code>weight</code>, and <code>value_attribute</code>. For full heatmap options
+              (like <code>color_ranges</code>), use raw YAML mode in Lovelace.
             </div>
             ${this._heatmapsError ? html`<div class="error">${this._heatmapsError}</div>` : nothing}
           </div>
@@ -205,7 +207,8 @@ class Lovelace3DEditor extends LitElement {
             ></ha-code-editor>
             <div class="help">
               Configure navbar placement and look. Example: <code>position</code>, <code>transparent</code>,
-              <code>offset_x</code>, and <code>items</code>.
+              <code>offset_x</code>, and <code>items</code>. Item actions: <code>toggle-heatmap</code> and
+              <code>set-floater-group</code> with <code>floater_group</code>.
             </div>
             ${this._navbarError ? html`<div class="error">${this._navbarError}</div>` : nothing}
           </div>
@@ -296,11 +299,12 @@ class Lovelace3DEditor extends LitElement {
     const label = String(floaterObj.label ?? floaterObj.name ?? entityId);
     const tapAction = String(floaterObj.tap_action ?? floaterObj.press_action ?? "toggle");
     const holdAction = String(floaterObj.hold_action ?? floaterObj.long_press_action ?? "popup");
+    const group = String(floaterObj.group ?? floaterObj.category ?? entityId.split(".", 1)[0] ?? "default");
 
     return html`
       <li class="preview-row">
         <span>${label}</span>
-        <span class="preview-meta">${entityId} - tap:${tapAction} hold:${holdAction}</span>
+        <span class="preview-meta">${entityId} - group:${group} tap:${tapAction} hold:${holdAction}</span>
       </li>
     `;
   }
