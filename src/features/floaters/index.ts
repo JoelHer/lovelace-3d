@@ -1,7 +1,9 @@
 export {
+  createFloaterOverlapSignature,
   createFloatersSignature,
   getFloaterActionLabel,
   getOppositeQuickAction,
+  parseFloaterOverlapConfig,
   parseFloaters,
 } from "./config";
-export type { FloaterAction, FloaterConfig, FloaterPoint } from "./config";
+export type { FloaterAction, FloaterConfig, FloaterOverlapConfig, FloaterPoint } from "./config";

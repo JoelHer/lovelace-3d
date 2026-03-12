@@ -2,9 +2,10 @@ import type { HassLike } from "./homeAssistant";
 
 export type LovelaceConfig = {
   type?: string;
-  entity?: string;
   rooms?: unknown;
   floaters?: unknown;
+  floater_overlap?: unknown;
+  camera?: unknown;
   heatmaps?: unknown;
   navbar?: unknown;
   room_popup_actions?: unknown;

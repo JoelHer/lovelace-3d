@@ -6,12 +6,15 @@ const EDITOR_TAG = "lovelace-3d-editor";
 const CARD_TYPE = "custom:lovelace-3d";
 const ROOMS_KEY = "rooms";
 const FLOATERS_KEY = "floaters";
+const FLOATER_OVERLAP_KEY = "floater_overlap";
+const CAMERA_KEY = "camera";
 const HEATMAPS_KEY = "heatmaps";
 const NAVBAR_KEY = "navbar";
 const ACTIONS_KEY = "room_popup_actions";
 const LEGACY_ACTIONS_KEY = "room_actions";
 
 const ROOMS_ICON = "mdi:floor-plan";
+const RENDERER_ICON = "mdi:video-3d";
 const FLOATERS_ICON = "mdi:lightbulb-group";
 const HEATMAPS_ICON = "mdi:thermometer";
 const NAVBAR_ICON = "mdi:dock-left";
@@ -22,6 +25,16 @@ const DEFAULT_HEATMAP_WEIGHT = 1;
 const DEFAULT_HEATMAP_OPACITY = 0.72;
 const DEFAULT_HEATMAP_RESOLUTION = 192;
 const DEFAULT_HEATMAP_BLUR = 0.55;
+const DEFAULT_CAMERA_POSITION: Point3Editor = { x: 3, y: 6, z: 10 };
+const DEFAULT_CAMERA_ROTATION = { x: -38.66, y: 0 };
+const DEFAULT_CAMERA_TARGET: Point3Editor = { x: 3, y: 0, z: 2.5 };
+const DEFAULT_CAMERA_MAX_ZOOM_OUT = 60;
+const DEFAULT_FLOATER_OVERLAP_DISTANCE = 40;
+const DEFAULT_FLOATER_OVERLAP_MIN_ITEMS = 2;
+const DEFAULT_FLOATER_OVERLAP_EXPAND_DURATION_MS = 120;
+const LOOK_DIRECTION_EPSILON = 0.0001;
+const MIN_CAMERA_PITCH_DEG = -89;
+const MAX_CAMERA_PITCH_DEG = 89;
 
 type EditorRecord = Record<string, unknown>;
 
@@ -34,6 +47,11 @@ type Point3Editor = {
   x: number;
   y: number;
   z: number;
+};
+
+type CameraRotationEditor = {
+  x: number;
+  y: number;
 };
 
 type RoomEditorEntry = {
@@ -54,6 +72,14 @@ type FloaterEditorEntry = {
   tapAction: FloaterAction;
   holdAction: FloaterAction;
   position: Point3Editor;
+  extra: EditorRecord;
+};
+
+type FloaterOverlapEditorConfig = {
+  enabled: boolean;
+  distancePx: number;
+  minItems: number;
+  expandDurationMs: number;
   extra: EditorRecord;
 };
 
@@ -86,6 +112,13 @@ type HeatmapEditorConfig = {
   blur: number;
   sensors: HeatmapSensorEditorEntry[];
   colorRanges: HeatmapColorRangeEditorEntry[];
+  extra: EditorRecord;
+};
+
+type CameraEditorConfig = {
+  position: Point3Editor;
+  rotation: CameraRotationEditor;
+  maxZoomOut: number;
   extra: EditorRecord;
 };
 
@@ -133,10 +166,14 @@ class Lovelace3DEditor extends LitElement {
   private _config: LovelaceConfig = {};
   private _rooms: RoomEditorEntry[] = [];
   private _floaters: FloaterEditorEntry[] = [];
+  private _floaterOverlap: FloaterOverlapEditorConfig = this._createDefaultFloaterOverlapEditorConfig();
   private _heatmap: HeatmapEditorConfig = this._createDefaultHeatmapEditorConfig();
+  private _camera: CameraEditorConfig = this._createDefaultCameraEditorConfig();
   private _navbar: NavbarEditorConfig = this._createDefaultNavbarEditorConfig();
   private _actions: PopupActionEditorEntry[] = [];
   private _actionsError = "";
+  private _cameraConfigured = false;
+  private _floaterOverlapConfigured = false;
   private _heatmapsConfigured = false;
   private _navbarConfigured = false;
   private _panelExpanded: Record<string, boolean> = {};
@@ -146,10 +183,14 @@ class Lovelace3DEditor extends LitElement {
     _config: { state: true },
     _rooms: { state: true },
     _floaters: { state: true },
+    _floaterOverlap: { state: true },
     _heatmap: { state: true },
+    _camera: { state: true },
     _navbar: { state: true },
     _actions: { state: true },
     _actionsError: { state: true },
+    _cameraConfigured: { state: true },
+    _floaterOverlapConfigured: { state: true },
     _heatmapsConfigured: { state: true },
     _navbarConfigured: { state: true },
     _panelExpanded: { state: true },
@@ -312,10 +353,14 @@ class Lovelace3DEditor extends LitElement {
     this._config = { ...(config ?? {}) };
     this._rooms = this._parseRooms(this._config[ROOMS_KEY]);
     this._floaters = this._parseFloaters(this._config[FLOATERS_KEY]);
+    this._floaterOverlap = this._parseFloaterOverlap(this._config[FLOATER_OVERLAP_KEY]);
     this._heatmap = this._parseHeatmap(this._config[HEATMAPS_KEY]);
+    this._camera = this._parseCamera(this._config[CAMERA_KEY]);
     this._navbar = this._parseNavbar(this._config[NAVBAR_KEY]);
     this._actions = this._parseActions(this._config[ACTIONS_KEY] ?? this._config[LEGACY_ACTIONS_KEY]);
     this._actionsError = "";
+    this._cameraConfigured = this._config[CAMERA_KEY] !== undefined;
+    this._floaterOverlapConfigured = this._config[FLOATER_OVERLAP_KEY] !== undefined;
     this._heatmapsConfigured = this._config[HEATMAPS_KEY] !== undefined;
     this._navbarConfigured = this._config[NAVBAR_KEY] !== undefined;
   }
@@ -325,36 +370,63 @@ class Lovelace3DEditor extends LitElement {
 
     return html`
       <div class="editor-shell">
-        ${this._renderCardSection()} ${this._renderRoomsSection()} ${this._renderFloatersSection()}
+        ${this._renderRendererSection()} ${this._renderRoomsSection()} ${this._renderFloatersSection()}
         ${this._renderHeatmapSection()} ${this._renderNavbarSection()} ${this._renderActionsSection()}
       </div>
     `;
   }
 
-  private _renderCardSection() {
+  private _renderRendererSection() {
     return html`
       <section class="section-panel">
         <ha-expansion-panel
           outlined
-          ?expanded=${this._isPanelExpanded("card", true)}
+          ?expanded=${this._isPanelExpanded("renderer", true)}
           @expanded-changed=${(ev: Event) => {
-            this._panelExpandedChanged("card", ev);
+            this._panelExpandedChanged("renderer", ev);
           }}
         >
-          ${this._renderSectionHeader("mdi:cube-outline", "Card Settings")}
+          ${this._renderSectionHeader(RENDERER_ICON, "Renderer Settings")}
           <div class="section-content">
-            <ha-form
-              .hass=${this.hass}
-              .data=${{ entity: this._config.entity ?? "" }}
-              .schema=${[
-                {
-                  name: "entity",
-                  selector: { entity: {} },
-                },
-              ]}
-              .computeLabel=${this._computeLabel}
-              @value-changed=${this._entityChanged}
-            ></ha-form>
+            <section class="item-panel">
+              <ha-expansion-panel
+                outlined
+                ?expanded=${this._isPanelExpanded("renderer-camera", true)}
+                @expanded-changed=${(ev: Event) => {
+                  this._panelExpandedChanged("renderer-camera", ev);
+                }}
+              >
+                <h5 slot="header" class="item-header">
+                  <span class="section-title-label">
+                    <ha-icon .icon=${"mdi:camera-control"}></ha-icon>
+                    Camera
+                  </span>
+                </h5>
+                <div class="item-content">
+                  <ha-form
+                    .hass=${this.hass}
+                    .data=${{
+                      position_x: this._camera.position.x,
+                      position_y: this._camera.position.y,
+                      position_z: this._camera.position.z,
+                      rotation_x: this._camera.rotation.x,
+                      rotation_y: this._camera.rotation.y,
+                      max_zoom_out: this._camera.maxZoomOut,
+                    }}
+                    .schema=${[
+                      { name: "position_x", selector: { number: { step: 0.1 } } },
+                      { name: "position_y", selector: { number: { step: 0.1 } } },
+                      { name: "position_z", selector: { number: { step: 0.1 } } },
+                      { name: "rotation_x", selector: { number: { min: -89, max: 89, step: 0.1 } } },
+                      { name: "rotation_y", selector: { number: { min: -180, max: 180, step: 0.1 } } },
+                      { name: "max_zoom_out", selector: { number: { min: 2, max: 300, step: 1 } } },
+                    ]}
+                    .computeLabel=${this._computeLabel}
+                    @value-changed=${this._cameraChanged}
+                  ></ha-form>
+                </div>
+              </ha-expansion-panel>
+            </section>
           </div>
         </ha-expansion-panel>
       </section>
@@ -483,6 +555,29 @@ class Lovelace3DEditor extends LitElement {
             <div class="section-help">
               Create floaters with entity, position and actions. Use <code>group</code> to control navbar filtering.
             </div>
+            <div class="sub-block">
+              <div class="item-title">Overlap Behavior</div>
+              <ha-form
+                .hass=${this.hass}
+                .data=${{
+                  overlap_enabled: this._floaterOverlap.enabled,
+                  overlap_distance_px: this._floaterOverlap.distancePx,
+                  overlap_min_items: this._floaterOverlap.minItems,
+                  overlap_expand_duration_ms: this._floaterOverlap.expandDurationMs,
+                }}
+                .schema=${[
+                  { name: "overlap_enabled", selector: { boolean: {} } },
+                  { name: "overlap_distance_px", selector: { number: { min: 8, max: 240, step: 1 } } },
+                  { name: "overlap_min_items", selector: { number: { min: 2, max: 12, step: 1 } } },
+                  {
+                    name: "overlap_expand_duration_ms",
+                    selector: { number: { min: 0, max: 1000, step: 10 } },
+                  },
+                ]}
+                .computeLabel=${this._computeLabel}
+                @value-changed=${this._floaterOverlapChanged}
+              ></ha-form>
+            </div>
             <div class="list">
               ${this._floaters.map((floater, floaterIndex) =>
                 html`
@@ -526,7 +621,7 @@ class Lovelace3DEditor extends LitElement {
                             { name: "id", selector: { text: {} } },
                             { name: "entity", selector: { entity: {} } },
                             { name: "label", selector: { text: {} } },
-                            { name: "icon", selector: { text: {} } },
+                            { name: "icon", selector: { icon: {} } },
                             { name: "group", selector: { text: {} } },
                             {
                               name: "tap_action",
@@ -919,7 +1014,7 @@ class Lovelace3DEditor extends LitElement {
                                 .schema=${[
                                   { name: "id", selector: { text: {} } },
                                   { name: "label", selector: { text: {} } },
-                                  { name: "icon", selector: { text: {} } },
+                                  { name: "icon", selector: { icon: {} } },
                                   {
                                     name: "action",
                                     selector: {
@@ -1138,6 +1233,18 @@ class Lovelace3DEditor extends LitElement {
         return "Blur";
       case "position":
         return "Position";
+      case "position_x":
+        return "Position X";
+      case "position_y":
+        return "Position Y";
+      case "position_z":
+        return "Position Z";
+      case "rotation_x":
+        return "Rotation X (deg)";
+      case "rotation_y":
+        return "Rotation Y (deg)";
+      case "max_zoom_out":
+        return "Max Zoom Out";
       case "transparent":
         return "Transparent";
       case "background_color":
@@ -1156,6 +1263,14 @@ class Lovelace3DEditor extends LitElement {
         return "Action";
       case "floater_group":
         return "Floater Group";
+      case "overlap_enabled":
+        return "Overlap Enabled";
+      case "overlap_distance_px":
+        return "Overlap Distance (px)";
+      case "overlap_min_items":
+        return "Min Items In Group";
+      case "overlap_expand_duration_ms":
+        return "Expand Duration (ms)";
       case "service":
         return "Service";
       case "close_on_run":
@@ -1171,16 +1286,54 @@ class Lovelace3DEditor extends LitElement {
     }
   };
 
-  private _entityChanged = (ev: CustomEvent) => {
-    const nextEntity = String(ev.detail?.value?.entity ?? "").trim();
-    const nextConfig = { ...this._config };
-    if (nextEntity) {
-      nextConfig.entity = nextEntity;
-    } else {
-      delete nextConfig.entity;
-    }
+  private _cameraChanged = (ev: CustomEvent) => {
+    const value = this._asRecord(ev.detail?.value) ?? {};
 
-    this._config = nextConfig;
+    this._cameraConfigured = true;
+    this._camera = {
+      ...this._camera,
+      position: {
+        x: this._toFinite(value.position_x, this._camera.position.x),
+        y: this._toFinite(value.position_y, this._camera.position.y),
+        z: this._toFinite(value.position_z, this._camera.position.z),
+      },
+      rotation: this._normalizeCameraRotation({
+        x: this._toFinite(value.rotation_x, this._camera.rotation.x),
+        y: this._toFinite(value.rotation_y, this._camera.rotation.y),
+      }),
+      maxZoomOut: Math.round(this._clamp(this._toFinite(value.max_zoom_out, this._camera.maxZoomOut), 2, 300)),
+    };
+    this._emitConfigFromEditor();
+  };
+
+  private _floaterOverlapChanged = (ev: CustomEvent) => {
+    const value = this._asRecord(ev.detail?.value) ?? {};
+
+    this._floaterOverlapConfigured = true;
+    this._floaterOverlap = {
+      ...this._floaterOverlap,
+      enabled: this._hasValueKey(value, "overlap_enabled")
+        ? value.overlap_enabled !== false
+        : this._floaterOverlap.enabled,
+      distancePx: this._clamp(
+        this._toFinite(value.overlap_distance_px, this._floaterOverlap.distancePx),
+        8,
+        240
+      ),
+      minItems: Math.round(
+        this._clamp(this._toFinite(value.overlap_min_items, this._floaterOverlap.minItems), 2, 12)
+      ),
+      expandDurationMs: Math.round(
+        this._clamp(
+          this._toFinite(
+            value.overlap_expand_duration_ms,
+            this._floaterOverlap.expandDurationMs
+          ),
+          0,
+          1000
+        )
+      ),
+    };
     this._emitConfigFromEditor();
   };
 
@@ -1603,6 +1756,11 @@ class Lovelace3DEditor extends LitElement {
 
   private _emitConfigFromEditor() {
     const nextConfig: LovelaceConfig = this._createBaseConfig();
+    delete nextConfig.entity;
+
+    const camera = this._serializeCamera();
+    if (camera) nextConfig[CAMERA_KEY] = camera;
+    else delete nextConfig[CAMERA_KEY];
 
     const rooms = this._serializeRooms();
     if (rooms.length > 0) nextConfig[ROOMS_KEY] = rooms;
@@ -1611,6 +1769,10 @@ class Lovelace3DEditor extends LitElement {
     const floaters = this._serializeFloaters();
     if (floaters.length > 0) nextConfig[FLOATERS_KEY] = floaters;
     else delete nextConfig[FLOATERS_KEY];
+
+    const floaterOverlap = this._serializeFloaterOverlap();
+    if (floaterOverlap) nextConfig[FLOATER_OVERLAP_KEY] = floaterOverlap;
+    else delete nextConfig[FLOATER_OVERLAP_KEY];
 
     const heatmaps = this._serializeHeatmap();
     if (heatmaps) nextConfig[HEATMAPS_KEY] = heatmaps;
@@ -1628,6 +1790,18 @@ class Lovelace3DEditor extends LitElement {
     delete nextConfig[LEGACY_ACTIONS_KEY];
 
     this._fireConfigChanged(nextConfig);
+  }
+
+  private _serializeCamera(): EditorRecord | null {
+    const next: EditorRecord = {
+      ...this._camera.extra,
+      position: [this._camera.position.x, this._camera.position.y, this._camera.position.z],
+      rotation: [this._camera.rotation.x, this._camera.rotation.y],
+      max_zoom_out: this._camera.maxZoomOut,
+    };
+
+    const hasContent = this._cameraConfigured || Object.keys(this._camera.extra).length > 0;
+    return hasContent ? next : null;
   }
 
   private _serializeRooms(): EditorRecord[] {
@@ -1671,6 +1845,20 @@ class Lovelace3DEditor extends LitElement {
 
       return next;
     });
+  }
+
+  private _serializeFloaterOverlap(): EditorRecord | null {
+    const next: EditorRecord = {
+      ...this._floaterOverlap.extra,
+      enabled: this._floaterOverlap.enabled,
+      distance_px: this._floaterOverlap.distancePx,
+      min_items: this._floaterOverlap.minItems,
+      expand_duration_ms: this._floaterOverlap.expandDurationMs,
+    };
+
+    const hasContent =
+      this._floaterOverlapConfigured || Object.keys(this._floaterOverlap.extra).length > 0;
+    return hasContent ? next : null;
   }
 
   private _serializeHeatmap(): EditorRecord | null {
@@ -1889,6 +2077,202 @@ class Lovelace3DEditor extends LitElement {
         };
       })
       .filter((entry): entry is FloaterEditorEntry => !!entry);
+  }
+
+  private _parseFloaterOverlap(rawOverlap: unknown): FloaterOverlapEditorConfig {
+    const source = this._asRecord(rawOverlap);
+
+    return {
+      enabled: source?.enabled !== false,
+      distancePx: this._clamp(
+        this._toFinite(
+          source?.distance_px ?? source?.distance ?? source?.overlap_distance ?? source?.threshold_px,
+          DEFAULT_FLOATER_OVERLAP_DISTANCE
+        ),
+        8,
+        240
+      ),
+      minItems: Math.round(
+        this._clamp(
+          this._toFinite(source?.min_items ?? source?.minItems ?? source?.group_size, DEFAULT_FLOATER_OVERLAP_MIN_ITEMS),
+          2,
+          12
+        )
+      ),
+      expandDurationMs: Math.round(
+        this._clamp(
+          this._toFinite(
+            source?.expand_duration_ms ?? source?.expandDurationMs ?? source?.expand_ms,
+            DEFAULT_FLOATER_OVERLAP_EXPAND_DURATION_MS
+          ),
+          0,
+          1000
+        )
+      ),
+      extra: this._withoutKeys(source, [
+        "enabled",
+        "distance_px",
+        "distance",
+        "overlap_distance",
+        "threshold_px",
+        "min_items",
+        "minItems",
+        "group_size",
+        "expand_duration_ms",
+        "expandDurationMs",
+        "expand_ms",
+      ]),
+    };
+  }
+
+  private _parseCamera(rawCamera: unknown): CameraEditorConfig {
+    const source = this._asRecord(rawCamera);
+
+    const positionSource: EditorRecord = {
+      x: source?.position_x ?? source?.camera_x,
+      y: source?.position_y ?? source?.camera_y,
+      z: source?.position_z ?? source?.camera_z,
+    };
+    const rotationSource: EditorRecord = {
+      x: source?.rotation_x ?? source?.rotate_x ?? source?.camera_rotation_x,
+      y: source?.rotation_y ?? source?.rotate_y ?? source?.camera_rotation_y,
+    };
+    const targetSource: EditorRecord = {
+      x: source?.target_x ?? source?.look_at_x ?? source?.lookat_x,
+      y: source?.target_y ?? source?.look_at_y ?? source?.lookat_y,
+      z: source?.target_z ?? source?.look_at_z ?? source?.lookat_z,
+    };
+    const position = this._parsePoint3(source?.position ?? source?.camera_position, positionSource, DEFAULT_CAMERA_POSITION);
+    const parsedRotation = this._parseRotation(
+      source?.rotation ?? source?.rotate ?? source?.camera_rotation,
+      rotationSource,
+      DEFAULT_CAMERA_ROTATION
+    );
+    const legacyTarget = this._parsePoint3(
+      source?.target ?? source?.look_at ?? source?.lookat,
+      targetSource,
+      DEFAULT_CAMERA_TARGET
+    );
+    const rotation = this._hasCameraRotation(source)
+      ? parsedRotation
+      : this._hasLegacyCameraTarget(source)
+        ? this._deriveRotationFromTarget(position, legacyTarget)
+        : parsedRotation;
+
+    return {
+      position,
+      rotation,
+      maxZoomOut: Math.round(
+        this._clamp(
+          this._toFinite(
+            source?.max_zoom_out ?? source?.maxZoomOut ?? source?.max_distance ?? source?.maxDistance,
+            DEFAULT_CAMERA_MAX_ZOOM_OUT
+          ),
+          2,
+          300
+        )
+      ),
+      extra: this._withoutKeys(source, [
+        "position",
+        "camera_position",
+        "position_x",
+        "position_y",
+        "position_z",
+        "camera_x",
+        "camera_y",
+        "camera_z",
+        "rotation",
+        "rotate",
+        "camera_rotation",
+        "rotation_x",
+        "rotation_y",
+        "rotation_z",
+        "rotate_x",
+        "rotate_y",
+        "rotate_z",
+        "camera_rotation_x",
+        "camera_rotation_y",
+        "camera_rotation_z",
+        "target",
+        "look_at",
+        "lookat",
+        "target_x",
+        "target_y",
+        "target_z",
+        "look_at_x",
+        "look_at_y",
+        "look_at_z",
+        "lookat_x",
+        "lookat_y",
+        "lookat_z",
+        "max_zoom_out",
+        "maxZoomOut",
+        "max_distance",
+        "maxDistance",
+      ]),
+    };
+  }
+
+  private _hasLegacyCameraTarget(source: EditorRecord | null | undefined): boolean {
+    if (!source) return false;
+    return (
+      source.target !== undefined ||
+      source.look_at !== undefined ||
+      source.lookat !== undefined ||
+      source.target_x !== undefined ||
+      source.target_y !== undefined ||
+      source.target_z !== undefined ||
+      source.look_at_x !== undefined ||
+      source.look_at_y !== undefined ||
+      source.look_at_z !== undefined ||
+      source.lookat_x !== undefined ||
+      source.lookat_y !== undefined ||
+      source.lookat_z !== undefined
+    );
+  }
+
+  private _hasCameraRotation(source: EditorRecord | null | undefined): boolean {
+    if (!source) return false;
+    return (
+      source.rotation !== undefined ||
+      source.rotate !== undefined ||
+      source.camera_rotation !== undefined ||
+      source.rotation_x !== undefined ||
+      source.rotation_y !== undefined ||
+      source.rotation_z !== undefined ||
+      source.rotate_x !== undefined ||
+      source.rotate_y !== undefined ||
+      source.rotate_z !== undefined ||
+      source.camera_rotation_x !== undefined ||
+      source.camera_rotation_y !== undefined ||
+      source.camera_rotation_z !== undefined
+    );
+  }
+
+  private _deriveRotationFromTarget(position: Point3Editor, target: Point3Editor): CameraRotationEditor {
+    const directionX = target.x - position.x;
+    const directionY = target.y - position.y;
+    const directionZ = target.z - position.z;
+    const length = Math.sqrt(
+      directionX * directionX + directionY * directionY + directionZ * directionZ
+    );
+
+    if (length <= LOOK_DIRECTION_EPSILON) {
+      return { ...DEFAULT_CAMERA_ROTATION };
+    }
+
+    const normalizedX = directionX / length;
+    const normalizedY = directionY / length;
+    const normalizedZ = directionZ / length;
+
+    const pitch = Math.asin(this._clamp(normalizedY, -1, 1));
+    const yaw = Math.atan2(-normalizedX, -normalizedZ);
+    const radToDeg = 180 / Math.PI;
+
+    return this._normalizeCameraRotation({
+      x: pitch * radToDeg,
+      y: yaw * radToDeg,
+    });
   }
 
   private _parseHeatmap(rawHeatmaps: unknown): HeatmapEditorConfig {
@@ -2138,6 +2522,25 @@ class Lovelace3DEditor extends LitElement {
     ];
   }
 
+  private _createDefaultCameraEditorConfig(): CameraEditorConfig {
+    return {
+      position: { ...DEFAULT_CAMERA_POSITION },
+      rotation: { ...DEFAULT_CAMERA_ROTATION },
+      maxZoomOut: DEFAULT_CAMERA_MAX_ZOOM_OUT,
+      extra: {},
+    };
+  }
+
+  private _createDefaultFloaterOverlapEditorConfig(): FloaterOverlapEditorConfig {
+    return {
+      enabled: true,
+      distancePx: DEFAULT_FLOATER_OVERLAP_DISTANCE,
+      minItems: DEFAULT_FLOATER_OVERLAP_MIN_ITEMS,
+      expandDurationMs: DEFAULT_FLOATER_OVERLAP_EXPAND_DURATION_MS,
+      extra: {},
+    };
+  }
+
   private _createDefaultHeatmapEditorConfig(): HeatmapEditorConfig {
     return {
       enabled: true,
@@ -2215,6 +2618,16 @@ class Lovelace3DEditor extends LitElement {
   }
 
   private _parsePoint3(rawPoint: unknown, fallbackSource: EditorRecord, fallback: Point3Editor): Point3Editor {
+    if (rawPoint && typeof rawPoint === "object" && !Array.isArray(rawPoint)) {
+      const point = rawPoint as EditorRecord;
+      const x = Number(point.x);
+      const y = Number(point.y);
+      const z = Number(point.z);
+      if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+        return { x, y, z };
+      }
+    }
+
     if (Array.isArray(rawPoint) && rawPoint.length >= 3) {
       const x = Number(rawPoint[0]);
       const y = Number(rawPoint[1]);
@@ -2232,6 +2645,44 @@ class Lovelace3DEditor extends LitElement {
     }
 
     return { ...fallback };
+  }
+
+  private _parseRotation(
+    rawRotation: unknown,
+    fallbackSource: EditorRecord,
+    fallback: CameraRotationEditor
+  ): CameraRotationEditor {
+    if (rawRotation && typeof rawRotation === "object" && !Array.isArray(rawRotation)) {
+      const point = rawRotation as EditorRecord;
+      const x = Number(point.x);
+      const y = Number(point.y);
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        return this._normalizeCameraRotation({ x, y });
+      }
+    }
+
+    if (Array.isArray(rawRotation) && rawRotation.length >= 2) {
+      const x = Number(rawRotation[0]);
+      const y = Number(rawRotation[1]);
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        return this._normalizeCameraRotation({ x, y });
+      }
+    }
+
+    const x = Number(fallbackSource.x);
+    const y = Number(fallbackSource.y);
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      return this._normalizeCameraRotation({ x, y });
+    }
+
+    return this._normalizeCameraRotation({ ...fallback });
+  }
+
+  private _normalizeCameraRotation(rotation: CameraRotationEditor): CameraRotationEditor {
+    const x = this._clamp(rotation.x, MIN_CAMERA_PITCH_DEG, MAX_CAMERA_PITCH_DEG);
+    const wrappedYaw = ((rotation.y % 360) + 360) % 360;
+    const y = wrappedYaw > 180 ? wrappedYaw - 360 : wrappedYaw;
+    return { x, y };
   }
 
   private _normalizeFloaterAction(value: unknown, fallback: FloaterAction): FloaterAction {

@@ -17,6 +17,26 @@ export type FloaterConfig = {
   holdAction: FloaterAction;
 };
 
+export type FloaterOverlapConfig = {
+  enabled: boolean;
+  distancePx: number;
+  minItems: number;
+  expandDurationMs: number;
+};
+
+const DEFAULT_FLOATER_OVERLAP_DISTANCE_PX = 40;
+const DEFAULT_FLOATER_OVERLAP_MIN_ITEMS = 2;
+const DEFAULT_FLOATER_OVERLAP_EXPAND_DURATION_MS = 120;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function asFinite(value: unknown): number | null {
+  const next = Number(value);
+  return Number.isFinite(next) ? next : null;
+}
+
 function defaultIconForDomain(domain: string): string {
   switch (domain) {
     case "light":
@@ -128,6 +148,39 @@ export function parseFloaters(rawFloaters: unknown): FloaterConfig[] {
   }
 
   return parsed;
+}
+
+export function parseFloaterOverlapConfig(rawOverlap: unknown): FloaterOverlapConfig {
+  const source =
+    rawOverlap && typeof rawOverlap === "object" && !Array.isArray(rawOverlap)
+      ? (rawOverlap as Record<string, unknown>)
+      : {};
+
+  const parsedDistance = asFinite(
+    source.distance_px ?? source.distance ?? source.overlap_distance ?? source.threshold_px
+  );
+  const parsedMinItems = asFinite(source.min_items ?? source.minItems ?? source.group_size);
+  const parsedExpandDuration = asFinite(
+    source.expand_duration_ms ?? source.expandDurationMs ?? source.expand_ms
+  );
+
+  return {
+    enabled: source.enabled !== false,
+    distancePx: clamp(parsedDistance ?? DEFAULT_FLOATER_OVERLAP_DISTANCE_PX, 8, 240),
+    minItems: Math.round(clamp(parsedMinItems ?? DEFAULT_FLOATER_OVERLAP_MIN_ITEMS, 2, 12)),
+    expandDurationMs: Math.round(
+      clamp(parsedExpandDuration ?? DEFAULT_FLOATER_OVERLAP_EXPAND_DURATION_MS, 0, 1000)
+    ),
+  };
+}
+
+export function createFloaterOverlapSignature(config: FloaterOverlapConfig): string {
+  return [
+    `enabled:${config.enabled}`,
+    `distance:${config.distancePx.toFixed(4)}`,
+    `minItems:${config.minItems}`,
+    `expand:${config.expandDurationMs}`,
+  ].join("|");
 }
 
 export function createFloatersSignature(floaters: ReadonlyArray<FloaterConfig>): string {

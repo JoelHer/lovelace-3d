@@ -115,11 +115,15 @@ import {
 import { useAreaRegistry } from "./composables/useAreaRegistry";
 import { createHeatmapSignature, parseHeatmapConfig, type HeatmapConfig } from "./features/heatmaps";
 import {
+  createFloaterOverlapSignature,
   createFloatersSignature,
   type FloaterAction,
+  type FloaterOverlapConfig,
+  parseFloaterOverlapConfig,
   parseFloaters,
   type FloaterConfig,
 } from "./features/floaters";
+import { createCameraSignature, parseCameraConfig, type CameraConfig } from "./features/camera";
 import {
   parseNavbarConfig,
   type NavbarConfig,
@@ -211,16 +215,18 @@ const floatersById = computed<Record<string, FloaterConfig>>(() => {
 });
 
 const heatmapConfig = computed<HeatmapConfig>(() => parseHeatmapConfig(cfg.value.heatmaps));
+const cameraConfig = computed<CameraConfig>(() => parseCameraConfig(cfg.value.camera));
+const floaterOverlapConfig = computed<FloaterOverlapConfig>(() =>
+  parseFloaterOverlapConfig(cfg.value.floater_overlap)
+);
 const navbarConfig = computed<NavbarConfig>(() => parseNavbarConfig(cfg.value.navbar));
 const HEATMAP_AUTO_RANGE_PADDING_RATIO = 0.12;
 
-const FLOATER_OVERLAP_DISTANCE_PX = 40;
 const FLOATER_GROUP_ICON = "mdi:layers-triple";
 const FLOATER_GROUP_COLLAPSE_ICON = "mdi:close";
 const FLOATER_GROUP_RADIUS_BASE_PX = 52;
 const FLOATER_GROUP_RADIUS_STEP_PX = 4;
 const FLOATER_GROUP_RADIUS_CAP_PX = 84;
-const FLOATER_GROUP_EXPAND_DURATION_MS = 120;
 
 type RenderedFloater = {
   id: string;
@@ -623,12 +629,17 @@ function onNavbarItemPressed(item: NavbarItemConfig) {
   }
 }
 
-function collectFloaterGroups(items: ReadonlyArray<RenderedFloater>): FloaterGroup[] {
+function collectFloaterGroups(
+  items: ReadonlyArray<RenderedFloater>,
+  overlapDistancePx: number,
+  minItems: number
+): FloaterGroup[] {
   if (items.length === 0) return [];
 
   const groups: FloaterGroup[] = [];
   const queued = new Set<number>();
-  const overlapDistanceSquared = FLOATER_OVERLAP_DISTANCE_PX * FLOATER_OVERLAP_DISTANCE_PX;
+  const overlapDistanceSquared = overlapDistancePx * overlapDistancePx;
+  const minItemsForGroup = Math.max(2, Math.round(minItems));
 
   for (let startIndex = 0; startIndex < items.length; startIndex += 1) {
     if (queued.has(startIndex)) continue;
@@ -672,12 +683,23 @@ function collectFloaterGroups(items: ReadonlyArray<RenderedFloater>): FloaterGro
       { x: 0, y: 0 }
     );
 
-    groups.push({
-      id: groupItems.map((item) => item.id).join("|"),
-      x: groupCenter.x / groupItems.length,
-      y: groupCenter.y / groupItems.length,
-      items: groupItems,
-    });
+    if (groupItems.length < minItemsForGroup) {
+      for (const item of groupItems) {
+        groups.push({
+          id: item.id,
+          x: item.x,
+          y: item.y,
+          items: [item],
+        });
+      }
+    } else {
+      groups.push({
+        id: groupItems.map((item) => item.id).join("|"),
+        x: groupCenter.x / groupItems.length,
+        y: groupCenter.y / groupItems.length,
+        items: groupItems,
+      });
+    }
   }
 
   groups.sort((a, b) => a.id.localeCompare(b.id));
@@ -731,9 +753,10 @@ function updateFloaterGroupExpandAnimation(nowMs: number) {
     return;
   }
 
+  const expandDurationMs = Math.max(1, floaterOverlapConfig.value.expandDurationMs);
   const linearProgress = Math.min(
     1,
-    Math.max(0, (nowMs - animation.startedAtMs) / FLOATER_GROUP_EXPAND_DURATION_MS)
+    Math.max(0, (nowMs - animation.startedAtMs) / expandDurationMs)
   );
   floaterGroupExpansionProgress.value = linearProgress;
   if (linearProgress >= 1) {
@@ -820,7 +843,21 @@ const floaterGroups = computed<FloaterGroup[]>(() => {
       items: [item],
     }));
   }
-  return collectFloaterGroups(renderedFloaters.value);
+
+  if (!floaterOverlapConfig.value.enabled) {
+    return renderedFloaters.value.map((item) => ({
+      id: item.id,
+      x: item.x,
+      y: item.y,
+      items: [item],
+    }));
+  }
+
+  return collectFloaterGroups(
+    renderedFloaters.value,
+    floaterOverlapConfig.value.distancePx,
+    floaterOverlapConfig.value.minItems
+  );
 });
 
 const renderedFloaterButtons = computed<FloaterButtonRender[]>(() => {
@@ -1200,21 +1237,29 @@ function updateHeatmapOverlay() {
 const roomsSignature = computed(() => createRoomsSignature(rooms.value));
 const floatersSignature = computed(() => createFloatersSignature(floaters.value));
 const heatmapSignature = computed(() => createHeatmapSignature(heatmapConfig.value));
+const cameraSignature = computed(() => createCameraSignature(cameraConfig.value));
+const floaterOverlapSignature = computed(() =>
+  createFloaterOverlapSignature(floaterOverlapConfig.value)
+);
 
 onMounted(() => {
   unsubscribeFloaterFrame = three.subscribeFrame(updateFloaterProjections);
 
   watch(
-    [areasReady, roomsSignature],
+    [areasReady, roomsSignature, cameraSignature],
     ([ready]) => {
       if (!threeMount.value) return;
       if (!ready) return;
       const nextRooms = rooms.value;
 
       if (!three.isMounted()) {
-        three.mount(threeMount.value, nextRooms, { onRoomClick });
+        three.mount(threeMount.value, nextRooms, {
+          onRoomClick,
+          camera: cameraConfig.value,
+        });
       } else {
         three.updateRooms(nextRooms);
+        three.updateCamera(cameraConfig.value);
       }
       updateFloaterProjections();
       updateHeatmapOverlay();
@@ -1249,6 +1294,10 @@ watch(floatersSignature, () => {
   if (!floatersById.value[floaterPopupId.value]) {
     closeFloaterPopup();
   }
+});
+
+watch(floaterOverlapSignature, () => {
+  closeFloaterGroup();
 });
 
 watch(isHeatmapFloaterMode, (enabled) => {

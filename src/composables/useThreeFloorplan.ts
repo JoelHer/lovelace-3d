@@ -4,6 +4,7 @@ import {
   CanvasTexture,
   ClampToEdgeWrapping,
   DirectionalLight,
+  Euler,
   GridHelper,
   Group,
   LinearFilter,
@@ -68,13 +69,28 @@ export type HeatmapRenderData = {
   visible: boolean;
 };
 
+export type ThreeCameraConfig = {
+  position: {
+    x: number;
+    y: number;
+    z: number;
+  };
+  rotation: {
+    x: number;
+    y: number;
+  };
+  maxZoomOut: number;
+};
+
 type MountOptions = {
   onRoomClick?: (event: RoomClickEvent) => void;
+  camera?: ThreeCameraConfig;
 };
 
 type UseThreeFloorplan = {
   mount(el: HTMLElement, rooms: Room[], options?: MountOptions): void;
   updateRooms(rooms: Room[]): void;
+  updateCamera(camera: ThreeCameraConfig): void;
   updateHeatmap(data: HeatmapRenderData | null): void;
   projectWorldPoint(worldX: number, worldY: number, worldZ: number): ProjectedPoint | null;
   subscribeFrame(listener: () => void): () => void;
@@ -156,6 +172,20 @@ const DEFAULT_HEATMAP_COLOR_STOPS: ReadonlyArray<HeatmapColorStop> = [
 ];
 const projectedWorldPoint = new Vector3();
 const cameraSpacePoint = new Vector3();
+const DEFAULT_CAMERA_POSITION = { x: 3, y: 6, z: 10 };
+const DEFAULT_CAMERA_ROTATION = { x: -38.66, y: 0 };
+const DEFAULT_CAMERA_MAX_ZOOM_OUT = 60;
+const DEFAULT_CAMERA_FALLBACK_ORBIT_DISTANCE = 9.6;
+const CAMERA_TARGET_PLANE_Y = 0;
+const CAMERA_TARGET_MIN_DISTANCE = 0.05;
+const CAMERA_TARGET_MAX_DISTANCE = 500;
+const CAMERA_TARGET_INTERSECTION_EPSILON = 0.0001;
+const CAMERA_MIN_PITCH_DEG = -89;
+const CAMERA_MAX_PITCH_DEG = 89;
+const CAMERA_CONTROLS_MIN_POLAR_ANGLE = (1 * Math.PI) / 180;
+const CAMERA_CONTROLS_MAX_POLAR_ANGLE = (89 * Math.PI) / 180;
+const CAMERA_MAX_DISTANCE_PADDING = 0.001;
+const CAMERA_FAR_PLANE_MULTIPLIER = 4;
 
 type DistanceNode = {
   index: number;
@@ -527,10 +557,17 @@ function computeDistanceMap(
   return distances;
 }
 
-function createCamera(): PerspectiveCamera {
+function createCamera(config?: ThreeCameraConfig): PerspectiveCamera {
   const camera = new PerspectiveCamera(50, 1, 0.1, 100);
-  camera.position.set(3, 6, 10);
-  camera.lookAt(3, 0, 2.5);
+  const position = config?.position ?? DEFAULT_CAMERA_POSITION;
+  const rotation = config?.rotation ?? DEFAULT_CAMERA_ROTATION;
+  const orientation = resolveCameraOrientation(position, rotation);
+  const maxDistance = resolveCameraMaxDistance(config?.maxZoomOut, orientation.orbitDistance);
+  camera.position.set(position.x, position.y, position.z);
+  camera.up.set(0, 1, 0);
+  camera.lookAt(orientation.target.x, orientation.target.y, orientation.target.z);
+  camera.far = resolveCameraFarPlane(maxDistance);
+  camera.updateProjectionMatrix();
   return camera;
 }
 
@@ -545,12 +582,22 @@ function createRenderer(container: HTMLElement): WebGLRenderer {
   return renderer;
 }
 
-function createControls(camera: PerspectiveCamera, renderer: WebGLRenderer): OrbitControls {
+function createControls(
+  camera: PerspectiveCamera,
+  renderer: WebGLRenderer,
+  config?: ThreeCameraConfig
+): OrbitControls {
   const controls = new OrbitControls(camera, renderer.domElement);
-  controls.target.set(3, 0, 2.5);
+  const position = config?.position ?? DEFAULT_CAMERA_POSITION;
+  const rotation = config?.rotation ?? DEFAULT_CAMERA_ROTATION;
+  const orientation = resolveCameraOrientation(position, rotation);
+  controls.target.set(orientation.target.x, orientation.target.y, orientation.target.z);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   controls.enableZoom = true;
+  controls.minPolarAngle = CAMERA_CONTROLS_MIN_POLAR_ANGLE;
+  controls.maxPolarAngle = CAMERA_CONTROLS_MAX_POLAR_ANGLE;
+  controls.maxDistance = resolveCameraMaxDistance(config?.maxZoomOut, orientation.orbitDistance);
   controls.mouseButtons = {
     LEFT: MOUSE.ROTATE,
     MIDDLE: MOUSE.ROTATE,
@@ -562,6 +609,86 @@ function createControls(camera: PerspectiveCamera, renderer: WebGLRenderer): Orb
   };
   controls.update();
   return controls;
+}
+
+function applyCameraConfig(state: FloorplanState, config: ThreeCameraConfig): void {
+  const camera = state.camera;
+  const controls = state.controls;
+  if (!camera || !controls) return;
+
+  const orientation = resolveCameraOrientation(config.position, config.rotation);
+  const maxZoomOut = resolveCameraMaxDistance(config.maxZoomOut, orientation.orbitDistance);
+
+  camera.position.set(config.position.x, config.position.y, config.position.z);
+  camera.up.set(0, 1, 0);
+  controls.target.set(orientation.target.x, orientation.target.y, orientation.target.z);
+  camera.lookAt(orientation.target.x, orientation.target.y, orientation.target.z);
+  camera.far = resolveCameraFarPlane(maxZoomOut);
+  camera.updateProjectionMatrix();
+  controls.maxDistance = maxZoomOut;
+  controls.update();
+}
+
+type CameraOrientation = {
+  target: { x: number; y: number; z: number };
+  orbitDistance: number;
+};
+
+function toRadians(value: number): number {
+  return (value * Math.PI) / 180;
+}
+
+function resolveCameraOrientation(
+  position: { x: number; y: number; z: number },
+  rotation: { x: number; y: number }
+): CameraOrientation {
+  const normalizedRotation = normalizeCameraRotation(rotation);
+  const euler = new Euler(toRadians(normalizedRotation.x), toRadians(normalizedRotation.y), 0, "XYZ");
+  const forward = new Vector3(0, 0, -1).applyEuler(euler).normalize();
+
+  let orbitDistance = DEFAULT_CAMERA_FALLBACK_ORBIT_DISTANCE;
+  if (Math.abs(forward.y) > CAMERA_TARGET_INTERSECTION_EPSILON) {
+    const intersectionDistance = (CAMERA_TARGET_PLANE_Y - position.y) / forward.y;
+    if (
+      intersectionDistance >= CAMERA_TARGET_MIN_DISTANCE &&
+      intersectionDistance <= CAMERA_TARGET_MAX_DISTANCE
+    ) {
+      orbitDistance = intersectionDistance;
+    }
+  }
+
+  const target = {
+    x: position.x + forward.x * orbitDistance,
+    y: position.y + forward.y * orbitDistance,
+    z: position.z + forward.z * orbitDistance,
+  };
+
+  return {
+    target,
+    orbitDistance,
+  };
+}
+
+function normalizeCameraRotation(rotation: { x: number; y: number }): { x: number; y: number } {
+  const x = clamp(rotation.x, CAMERA_MIN_PITCH_DEG, CAMERA_MAX_PITCH_DEG);
+  const wrappedYaw = ((rotation.y % 360) + 360) % 360;
+  const y = wrappedYaw > 180 ? wrappedYaw - 360 : wrappedYaw;
+  return { x, y };
+}
+
+function resolveCameraMaxDistance(
+  rawMaxZoomOut: unknown,
+  orbitDistance: number
+): number {
+  const configured =
+    Number.isFinite(rawMaxZoomOut) && typeof rawMaxZoomOut === "number"
+      ? Math.max(2, rawMaxZoomOut)
+      : DEFAULT_CAMERA_MAX_ZOOM_OUT;
+  return Math.max(configured, orbitDistance + CAMERA_MAX_DISTANCE_PADDING);
+}
+
+function resolveCameraFarPlane(maxDistance: number): number {
+  return Math.max(100, maxDistance * CAMERA_FAR_PLANE_MULTIPLIER);
 }
 
 function addSceneDecorations(scene: Scene): void {
@@ -1279,9 +1406,9 @@ export function useThreeFloorplan(): UseThreeFloorplan {
     }
 
     state.scene = new Scene();
-    state.camera = createCamera();
+    state.camera = createCamera(options?.camera);
     state.renderer = createRenderer(container);
-    state.controls = createControls(state.camera, state.renderer);
+    state.controls = createControls(state.camera, state.renderer, options?.camera);
 
     addSceneDecorations(state.scene);
     replaceRooms(state, rooms);
@@ -1304,6 +1431,10 @@ export function useThreeFloorplan(): UseThreeFloorplan {
     replaceRooms(state, rooms);
   };
 
+  const updateCamera = (cameraConfig: ThreeCameraConfig): void => {
+    applyCameraConfig(state, cameraConfig);
+  };
+
   const updateHeatmap = (data: HeatmapRenderData | null): void => {
     state.heatmapData = data;
     renderHeatmap(state);
@@ -1318,6 +1449,7 @@ export function useThreeFloorplan(): UseThreeFloorplan {
   return {
     mount,
     updateRooms,
+    updateCamera,
     updateHeatmap,
     projectWorldPoint: (worldX, worldY, worldZ) => projectWorldPoint(state, worldX, worldY, worldZ),
     subscribeFrame: (listener) => {

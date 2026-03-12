@@ -14,7 +14,6 @@ A Home Assistant custom Lovelace card that renders a 3D floorplan and room actio
 
 ```yaml
 type: custom:lovelace-3d
-entity: sensor.temperature
 room_popup_actions:
   - service: light.turn_on
     label: Turn lights on
@@ -36,6 +35,15 @@ floaters:
     position: [2, 1.2, 1.5] # x, y, z in the same world-space as room polygons
     tap_action: toggle # toggle | more-info | popup
     hold_action: popup # toggle | more-info | popup
+floater_overlap:
+  enabled: true
+  distance_px: 40
+  min_items: 2
+  expand_duration_ms: 120
+camera:
+  position: [3, 6, 10] # camera world position (x, y, z)
+  rotation: [-38.66, 0] # degrees: [x, y]
+  max_zoom_out: 60
 heatmaps:
   enabled: true
   sensors:
