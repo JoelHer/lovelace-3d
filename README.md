@@ -2,6 +2,18 @@
 
 A Home Assistant custom Lovelace card that renders a 3D floorplan and room action popups.
 
+## Installation (HACS Custom Repository)
+
+1. Open HACS in Home Assistant.
+2. Go to the 3-dot menu -> `Custom repositories`.
+3. Add this repository URL and choose the category `Dashboard`.
+4. Install `Lovelace 3D` from HACS and restart Home Assistant.
+5. Ensure the Lovelace resource exists (HACS often adds this automatically):
+
+```text
+/hacsfiles/lovelace-3d/lovelace-3d.js
+```
+
 ## Project Structure
 
 - `src/lovelace-3d.ts`: custom element entrypoint and card registration.
@@ -126,4 +138,10 @@ npm run dev
 npm run build
 ```
 
-Build output is emitted to Home Assistant's `www` directory per local Vite config.
+`npm run build` creates the HACS artifact at `dist/lovelace-3d.js`.
+
+To build directly into a Home Assistant `www` folder for local testing:
+
+```bash
+BUILD_OUT_DIR=/path/to/config/www/lovelace-3d npm run build
+```
