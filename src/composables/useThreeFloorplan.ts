@@ -95,6 +95,7 @@ type PointerStartState = {
   clientY: number;
   button: number;
   isPrimary: boolean;
+  pointerType: string;
 };
 
 type FloorplanState = {
@@ -127,6 +128,7 @@ type FloorplanState = {
 };
 
 const CLICK_MOVE_TOLERANCE_PX = 6;
+const TOUCH_GESTURE_LOCK_THRESHOLD_PX = 8;
 const HEATMAP_PLANE_Y = 0.03;
 const HEATMAP_BOUNDS_PADDING = 0.2;
 const HEATMAP_MIN_WIDTH = 0.6;
@@ -538,6 +540,7 @@ function createRenderer(container: HTMLElement): WebGLRenderer {
   renderer.domElement.style.width = "100%";
   renderer.domElement.style.height = "100%";
   renderer.domElement.style.display = "block";
+  renderer.domElement.style.touchAction = "none";
   container.appendChild(renderer.domElement);
   return renderer;
 }
@@ -554,8 +557,8 @@ function createControls(camera: PerspectiveCamera, renderer: WebGLRenderer): Orb
     RIGHT: MOUSE.PAN,
   };
   controls.touches = {
-    ONE: TOUCH.ROTATE,
-    TWO: TOUCH.PAN,
+    ONE: TOUCH.PAN,
+    TWO: TOUCH.DOLLY_ROTATE,
   };
   controls.update();
   return controls;
@@ -910,6 +913,16 @@ function pickRoomAtPointer(
   };
 }
 
+function readFirstTwoTouchPoints(
+  points: ReadonlyMap<number, { x: number; y: number }>
+): [{ x: number; y: number }, { x: number; y: number }] | null {
+  const iterator = points.values();
+  const first = iterator.next().value as { x: number; y: number } | undefined;
+  const second = iterator.next().value as { x: number; y: number } | undefined;
+  if (!first || !second) return null;
+  return [first, second];
+}
+
 function installPointerHandlers(
   state: FloorplanState,
   onRoomClick?: (event: RoomClickEvent) => void
@@ -919,8 +932,82 @@ function installPointerHandlers(
   const raycaster = new Raycaster();
   const mouse = new Vector2();
   let pointerStart: PointerStartState | null = null;
+  const activeTouchPoints = new Map<number, { x: number; y: number }>();
+  let touchGestureActive = false;
+  let touchGestureUsed = false;
+  let touchGestureMode: "rotate" | "zoom" | null = null;
+  let touchGestureStartDistance = 0;
+  let touchGestureStartMidX = 0;
+  let touchGestureStartMidY = 0;
+
+  const controlsDefaultRotateEnabled = state.controls?.enableRotate ?? true;
+  const controlsDefaultZoomEnabled = state.controls?.enableZoom ?? true;
+
+  const applyTouchControlMode = () => {
+    const controls = state.controls;
+    if (!controls) return;
+
+    if (!touchGestureActive) {
+      controls.enableRotate = controlsDefaultRotateEnabled;
+      controls.enableZoom = controlsDefaultZoomEnabled;
+      return;
+    }
+
+    if (touchGestureMode === "zoom") {
+      controls.enableRotate = false;
+      controls.enableZoom = controlsDefaultZoomEnabled;
+      return;
+    }
+
+    if (touchGestureMode === "rotate") {
+      controls.enableRotate = controlsDefaultRotateEnabled;
+      controls.enableZoom = false;
+      return;
+    }
+
+    // Lock both until we classify the gesture to prevent mixed zoom+rotate.
+    controls.enableRotate = false;
+    controls.enableZoom = false;
+  };
+
+  const endTouchGesture = () => {
+    touchGestureActive = false;
+    touchGestureMode = null;
+    touchGestureStartDistance = 0;
+    touchGestureStartMidX = 0;
+    touchGestureStartMidY = 0;
+    if (activeTouchPoints.size === 0) {
+      touchGestureUsed = false;
+    }
+    applyTouchControlMode();
+  };
 
   const onPointerDown = (event: PointerEvent) => {
+    if (event.pointerType === "touch") {
+      activeTouchPoints.set(event.pointerId, {
+        x: event.clientX,
+        y: event.clientY,
+      });
+
+      if (activeTouchPoints.size > 1) {
+        touchGestureUsed = true;
+        pointerStart = null;
+        touchGestureMode = null;
+
+        const points = readFirstTwoTouchPoints(activeTouchPoints);
+        if (points) {
+          const [first, second] = points;
+          const dx = second.x - first.x;
+          const dy = second.y - first.y;
+          touchGestureStartDistance = Math.hypot(dx, dy);
+          touchGestureStartMidX = (first.x + second.x) / 2;
+          touchGestureStartMidY = (first.y + second.y) / 2;
+          touchGestureActive = true;
+          applyTouchControlMode();
+        }
+      }
+    }
+
     if (!event.isPrimary) return;
     pointerStart = {
       pointerId: event.pointerId,
@@ -928,10 +1015,57 @@ function installPointerHandlers(
       clientY: event.clientY,
       button: event.button,
       isPrimary: event.isPrimary,
+      pointerType: event.pointerType,
     };
   };
 
+  const onPointerMove = (event: PointerEvent) => {
+    if (event.pointerType !== "touch") return;
+    if (!activeTouchPoints.has(event.pointerId)) return;
+
+    activeTouchPoints.set(event.pointerId, {
+      x: event.clientX,
+      y: event.clientY,
+    });
+
+    if (!touchGestureActive) return;
+    if (touchGestureMode) return;
+
+    const points = readFirstTwoTouchPoints(activeTouchPoints);
+    if (!points) return;
+    const [first, second] = points;
+    const dx = second.x - first.x;
+    const dy = second.y - first.y;
+    const distance = Math.hypot(dx, dy);
+    const midX = (first.x + second.x) / 2;
+    const midY = (first.y + second.y) / 2;
+
+    const pinchDelta = Math.abs(distance - touchGestureStartDistance);
+    const midpointDelta = Math.hypot(midX - touchGestureStartMidX, midY - touchGestureStartMidY);
+    if (
+      pinchDelta < TOUCH_GESTURE_LOCK_THRESHOLD_PX &&
+      midpointDelta < TOUCH_GESTURE_LOCK_THRESHOLD_PX
+    ) {
+      return;
+    }
+
+    touchGestureMode = pinchDelta >= midpointDelta ? "zoom" : "rotate";
+    applyTouchControlMode();
+  };
+
   const onPointerUp = (event: PointerEvent) => {
+    if (event.pointerType === "touch") {
+      activeTouchPoints.delete(event.pointerId);
+      if (activeTouchPoints.size < 2) {
+        endTouchGesture();
+      }
+    }
+
+    if (touchGestureUsed) {
+      pointerStart = null;
+      return;
+    }
+
     if (!pointerStart) return;
 
     const start = pointerStart;
@@ -939,7 +1073,8 @@ function installPointerHandlers(
 
     if (!event.isPrimary || !start.isPrimary) return;
     if (event.pointerId !== start.pointerId) return;
-    if (event.pointerType === "mouse" && (start.button !== 0 || event.button !== 0)) return;
+    if (start.pointerType === "mouse" && (start.button !== 0 || event.button !== 0)) return;
+    if (start.pointerType === "touch" && activeTouchPoints.size > 0) return;
 
     const dx = event.clientX - start.clientX;
     const dy = event.clientY - start.clientY;
@@ -951,19 +1086,53 @@ function installPointerHandlers(
     }
   };
 
+  const onPointerCancel = (event: PointerEvent) => {
+    if (event.pointerType === "touch") {
+      activeTouchPoints.delete(event.pointerId);
+      if (activeTouchPoints.size < 2) {
+        endTouchGesture();
+      }
+    }
+    pointerStart = null;
+  };
+
   const clearPointerState = () => {
     pointerStart = null;
+    activeTouchPoints.clear();
+    endTouchGesture();
+  };
+
+  const preventMultiTouchBrowserZoom = (event: TouchEvent) => {
+    if (event.touches.length > 1) {
+      event.preventDefault();
+    }
+  };
+
+  const preventGestureEvent = (event: Event) => {
+    event.preventDefault();
   };
 
   const domElement = state.renderer.domElement;
   domElement.addEventListener("pointerdown", onPointerDown);
+  domElement.addEventListener("pointermove", onPointerMove);
   domElement.addEventListener("pointerup", onPointerUp);
-  domElement.addEventListener("pointercancel", clearPointerState);
+  domElement.addEventListener("pointercancel", onPointerCancel);
+  domElement.addEventListener("pointerleave", clearPointerState);
+  domElement.addEventListener("touchmove", preventMultiTouchBrowserZoom, { passive: false });
+  domElement.addEventListener("gesturestart", preventGestureEvent, { passive: false });
+  domElement.addEventListener("gesturechange", preventGestureEvent, { passive: false });
+  domElement.addEventListener("gestureend", preventGestureEvent, { passive: false });
 
   return () => {
     domElement.removeEventListener("pointerdown", onPointerDown);
+    domElement.removeEventListener("pointermove", onPointerMove);
     domElement.removeEventListener("pointerup", onPointerUp);
-    domElement.removeEventListener("pointercancel", clearPointerState);
+    domElement.removeEventListener("pointercancel", onPointerCancel);
+    domElement.removeEventListener("pointerleave", clearPointerState);
+    domElement.removeEventListener("touchmove", preventMultiTouchBrowserZoom);
+    domElement.removeEventListener("gesturestart", preventGestureEvent);
+    domElement.removeEventListener("gesturechange", preventGestureEvent);
+    domElement.removeEventListener("gestureend", preventGestureEvent);
   };
 }
 
