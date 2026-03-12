@@ -3,6 +3,7 @@ import {
   AmbientLight,
   CanvasTexture,
   ClampToEdgeWrapping,
+  Color,
   DirectionalLight,
   Euler,
   GridHelper,
@@ -82,15 +83,26 @@ export type ThreeCameraConfig = {
   maxZoomOut: number;
 };
 
+export type ThreeRendererConfig = {
+  wallColor: string | null;
+  wallOpacity: number;
+  wallHeight: number;
+  gridEnabled: boolean;
+  gridColor: string | null;
+  backgroundColor: string | null;
+};
+
 type MountOptions = {
   onRoomClick?: (event: RoomClickEvent) => void;
   camera?: ThreeCameraConfig;
+  renderer?: ThreeRendererConfig;
 };
 
 type UseThreeFloorplan = {
   mount(el: HTMLElement, rooms: Room[], options?: MountOptions): void;
   updateRooms(rooms: Room[]): void;
   updateCamera(camera: ThreeCameraConfig): void;
+  updateRenderer(renderer: ThreeRendererConfig): void;
   updateHeatmap(data: HeatmapRenderData | null): void;
   projectWorldPoint(worldX: number, worldY: number, worldZ: number): ProjectedPoint | null;
   subscribeFrame(listener: () => void): () => void;
@@ -126,6 +138,8 @@ type FloorplanState = {
   floorMaterial: MeshStandardMaterial | null;
   wallGroup: Group | null;
   wallMaterial: MeshStandardMaterial | null;
+  gridHelper: GridHelper | null;
+  rendererConfig: ThreeRendererConfig;
   heatmapBounds: HeatmapBounds | null;
   heatmapMesh: Mesh | null;
   heatmapMaterial: MeshBasicMaterial | null;
@@ -186,6 +200,12 @@ const CAMERA_CONTROLS_MIN_POLAR_ANGLE = (1 * Math.PI) / 180;
 const CAMERA_CONTROLS_MAX_POLAR_ANGLE = (89 * Math.PI) / 180;
 const CAMERA_MAX_DISTANCE_PADDING = 0.001;
 const CAMERA_FAR_PLANE_MULTIPLIER = 4;
+const DEFAULT_WALL_COLOR_HEX = 0xffffff;
+const DEFAULT_WALL_OPACITY = 1;
+const DEFAULT_WALL_HEIGHT = 2.6;
+const DEFAULT_GRID_ENABLED = true;
+const DEFAULT_GRID_PRIMARY_COLOR_HEX = 0x888888;
+const DEFAULT_GRID_SECONDARY_COLOR_HEX = 0x444444;
 
 type DistanceNode = {
   index: number;
@@ -194,6 +214,21 @@ type DistanceNode = {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function normalizeRendererConfig(config?: ThreeRendererConfig): ThreeRendererConfig {
+  const parsedWallOpacity = Number(config?.wallOpacity);
+  const parsedWallHeight = Number(config?.wallHeight);
+
+  return {
+    wallColor: typeof config?.wallColor === "string" && config.wallColor.trim() ? config.wallColor.trim() : null,
+    wallOpacity: clamp(Number.isFinite(parsedWallOpacity) ? parsedWallOpacity : DEFAULT_WALL_OPACITY, 0, 1),
+    wallHeight: clamp(Number.isFinite(parsedWallHeight) ? parsedWallHeight : DEFAULT_WALL_HEIGHT, 0.2, 10),
+    gridEnabled: config?.gridEnabled === undefined ? DEFAULT_GRID_ENABLED : config.gridEnabled !== false,
+    gridColor: typeof config?.gridColor === "string" && config.gridColor.trim() ? config.gridColor.trim() : null,
+    backgroundColor:
+      typeof config?.backgroundColor === "string" && config.backgroundColor.trim() ? config.backgroundColor.trim() : null,
+  };
 }
 
 function computeHeatmapBounds(rooms: ReadonlyArray<Room>): HeatmapBounds | null {
@@ -691,8 +726,107 @@ function resolveCameraFarPlane(maxDistance: number): number {
   return Math.max(100, maxDistance * CAMERA_FAR_PLANE_MULTIPLIER);
 }
 
-function addSceneDecorations(scene: Scene): void {
-  scene.add(new GridHelper(100, 100, 0x888888, 0x444444));
+function resolveColor(
+  rawColor: string | null,
+  fallbackHex: number
+): Color {
+  if (!rawColor) {
+    return new Color(fallbackHex);
+  }
+  try {
+    return new Color(rawColor);
+  } catch (_error) {
+    return new Color(fallbackHex);
+  }
+}
+
+function applyWallMaterialConfig(material: MeshStandardMaterial | null, config: ThreeRendererConfig): void {
+  if (!material) return;
+
+  const wallColor = resolveColor(config.wallColor, DEFAULT_WALL_COLOR_HEX);
+  material.color.copy(wallColor);
+  material.opacity = clamp(config.wallOpacity, 0, 1);
+  material.needsUpdate = true;
+}
+
+function createGridHelper(config: ThreeRendererConfig): GridHelper {
+  const primary = resolveColor(config.gridColor, DEFAULT_GRID_PRIMARY_COLOR_HEX);
+  const secondary = primary.clone().multiplyScalar(0.45);
+  if (config.gridColor === null) {
+    secondary.setHex(DEFAULT_GRID_SECONDARY_COLOR_HEX);
+  }
+
+  const grid = new GridHelper(100, 100, primary, secondary);
+  grid.visible = config.gridEnabled;
+  return grid;
+}
+
+function disposeGridHelper(gridHelper: GridHelper | null): void {
+  if (!gridHelper) return;
+  gridHelper.geometry.dispose();
+  if (Array.isArray(gridHelper.material)) {
+    for (const material of gridHelper.material) {
+      material.dispose();
+    }
+  } else {
+    gridHelper.material.dispose();
+  }
+}
+
+function replaceGridHelper(state: FloorplanState): void {
+  if (!state.scene) return;
+
+  if (state.gridHelper) {
+    state.scene.remove(state.gridHelper);
+    disposeGridHelper(state.gridHelper);
+    state.gridHelper = null;
+  }
+
+  const nextGrid = createGridHelper(state.rendererConfig);
+  state.gridHelper = nextGrid;
+  state.scene.add(nextGrid);
+}
+
+function applySceneBackground(scene: Scene | null, backgroundColor: string | null): void {
+  if (!scene) return;
+  if (!backgroundColor) {
+    scene.background = null;
+    return;
+  }
+  try {
+    scene.background = new Color(backgroundColor);
+  } catch (_error) {
+    scene.background = null;
+  }
+}
+
+function applyRendererConfig(state: FloorplanState, config: ThreeRendererConfig): void {
+  const previous = state.rendererConfig;
+  const normalized = normalizeRendererConfig(config);
+  const wallHeightChanged = Math.abs(previous.wallHeight - normalized.wallHeight) > 0.0001;
+  const gridColorChanged = previous.gridColor !== normalized.gridColor;
+
+  state.rendererConfig = normalized;
+  applySceneBackground(state.scene, normalized.backgroundColor);
+
+  if (state.scene && (gridColorChanged || !state.gridHelper)) {
+    replaceGridHelper(state);
+  } else if (state.gridHelper) {
+    state.gridHelper.visible = normalized.gridEnabled;
+  }
+
+  applyWallMaterialConfig(state.wallMaterial, normalized);
+
+  if (wallHeightChanged && state.heatmapRooms.length > 0) {
+    replaceWallGroup(state, state.heatmapRooms);
+  }
+}
+
+function addSceneDecorations(state: FloorplanState): void {
+  const scene = state.scene;
+  if (!scene) return;
+  replaceGridHelper(state);
+  applySceneBackground(scene, state.rendererConfig.backgroundColor);
 
   const keyLight = new DirectionalLight(0xffffff, 1.05);
   keyLight.position.set(4, 6, 5);
@@ -741,9 +875,12 @@ function replaceWallGroup(state: FloorplanState, rooms: ReadonlyArray<Room>): vo
     disposeMeshGeometries(state.wallGroup);
   }
 
-  const walls = createWallGroup(rooms, state.viewDirUniform, state.wallMaterial ?? undefined);
+  const walls = createWallGroup(rooms, state.viewDirUniform, state.wallMaterial ?? undefined, {
+    height: state.rendererConfig.wallHeight,
+  });
   state.wallGroup = walls.group;
   state.wallMaterial = walls.material;
+  applyWallMaterialConfig(state.wallMaterial, state.rendererConfig);
   state.scene.add(state.wallGroup);
 }
 
@@ -1301,6 +1438,12 @@ function cleanupState(state: FloorplanState): void {
   state.controls?.dispose();
   state.controls = null;
 
+  if (state.scene && state.gridHelper) {
+    state.scene.remove(state.gridHelper);
+  }
+  disposeGridHelper(state.gridHelper);
+  state.gridHelper = null;
+
   if (state.floorGroup) {
     disposeMeshGeometries(state.floorGroup);
     state.floorGroup = null;
@@ -1383,6 +1526,8 @@ export function useThreeFloorplan(): UseThreeFloorplan {
     floorMaterial: null,
     wallGroup: null,
     wallMaterial: null,
+    gridHelper: null,
+    rendererConfig: normalizeRendererConfig(),
     heatmapBounds: null,
     heatmapMesh: null,
     heatmapMaterial: null,
@@ -1405,12 +1550,13 @@ export function useThreeFloorplan(): UseThreeFloorplan {
       cleanupState(state);
     }
 
+    state.rendererConfig = normalizeRendererConfig(options?.renderer);
     state.scene = new Scene();
     state.camera = createCamera(options?.camera);
     state.renderer = createRenderer(container);
     state.controls = createControls(state.camera, state.renderer, options?.camera);
 
-    addSceneDecorations(state.scene);
+    addSceneDecorations(state);
     replaceRooms(state, rooms);
 
     resizeRenderer(state.renderer, state.camera, container);
@@ -1435,6 +1581,10 @@ export function useThreeFloorplan(): UseThreeFloorplan {
     applyCameraConfig(state, cameraConfig);
   };
 
+  const updateRenderer = (rendererConfig: ThreeRendererConfig): void => {
+    applyRendererConfig(state, rendererConfig);
+  };
+
   const updateHeatmap = (data: HeatmapRenderData | null): void => {
     state.heatmapData = data;
     renderHeatmap(state);
@@ -1450,6 +1600,7 @@ export function useThreeFloorplan(): UseThreeFloorplan {
     mount,
     updateRooms,
     updateCamera,
+    updateRenderer,
     updateHeatmap,
     projectWorldPoint: (worldX, worldY, worldZ) => projectWorldPoint(state, worldX, worldY, worldZ),
     subscribeFrame: (listener) => {

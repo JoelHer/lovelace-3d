@@ -1,5 +1,5 @@
 <template>
-  <ha-card class="ha-card-reset">
+  <ha-card class="ha-card-reset" :class="{ 'card-transparent': rendererConfig.cardTransparent }" :style="cardStyle">
     <div class="wrap">
       <div class="content">
         <div class="three-shell">
@@ -124,6 +124,7 @@ import {
   type FloaterConfig,
 } from "./features/floaters";
 import { createCameraSignature, parseCameraConfig, type CameraConfig } from "./features/camera";
+import { createRendererSignature, parseRendererConfig, type RendererConfig } from "./features/renderer";
 import {
   parseNavbarConfig,
   type NavbarConfig,
@@ -216,11 +217,27 @@ const floatersById = computed<Record<string, FloaterConfig>>(() => {
 
 const heatmapConfig = computed<HeatmapConfig>(() => parseHeatmapConfig(cfg.value.heatmaps));
 const cameraConfig = computed<CameraConfig>(() => parseCameraConfig(cfg.value.camera));
+const rendererConfig = computed<RendererConfig>(() => parseRendererConfig(cfg.value.renderer));
 const floaterOverlapConfig = computed<FloaterOverlapConfig>(() =>
   parseFloaterOverlapConfig(cfg.value.floater_overlap)
 );
 const navbarConfig = computed<NavbarConfig>(() => parseNavbarConfig(cfg.value.navbar));
 const HEATMAP_AUTO_RANGE_PADDING_RATIO = 0.12;
+
+const cardStyle = computed<Record<string, string>>(() => {
+  const config = rendererConfig.value;
+  const style: Record<string, string> = {};
+
+  if (config.cardTransparent) {
+    style["--ha-card-background"] = "transparent";
+    style["--ha-card-box-shadow"] = "none";
+    style["--ha-card-border-width"] = "0px";
+  } else if (config.cardBackgroundColor) {
+    style["--ha-card-background"] = config.cardBackgroundColor;
+  }
+
+  return style;
+});
 
 const FLOATER_GROUP_ICON = "mdi:layers-triple";
 const FLOATER_GROUP_COLLAPSE_ICON = "mdi:close";
@@ -1238,6 +1255,7 @@ const roomsSignature = computed(() => createRoomsSignature(rooms.value));
 const floatersSignature = computed(() => createFloatersSignature(floaters.value));
 const heatmapSignature = computed(() => createHeatmapSignature(heatmapConfig.value));
 const cameraSignature = computed(() => createCameraSignature(cameraConfig.value));
+const rendererSignature = computed(() => createRendererSignature(rendererConfig.value));
 const floaterOverlapSignature = computed(() =>
   createFloaterOverlapSignature(floaterOverlapConfig.value)
 );
@@ -1246,7 +1264,7 @@ onMounted(() => {
   unsubscribeFloaterFrame = three.subscribeFrame(updateFloaterProjections);
 
   watch(
-    [areasReady, roomsSignature, cameraSignature],
+    [areasReady, roomsSignature, cameraSignature, rendererSignature],
     ([ready]) => {
       if (!threeMount.value) return;
       if (!ready) return;
@@ -1256,10 +1274,12 @@ onMounted(() => {
         three.mount(threeMount.value, nextRooms, {
           onRoomClick,
           camera: cameraConfig.value,
+          renderer: rendererConfig.value,
         });
       } else {
         three.updateRooms(nextRooms);
         three.updateCamera(cameraConfig.value);
+        three.updateRenderer(rendererConfig.value);
       }
       updateFloaterProjections();
       updateHeatmapOverlay();

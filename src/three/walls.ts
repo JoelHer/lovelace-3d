@@ -304,16 +304,23 @@ export function syncWallMaterialViewDirection(
 export function createWallGroup(
   rooms: ReadonlyArray<Room>,
   viewDirUniform: ViewDirectionUniform,
-  material?: MeshStandardMaterial
+  material?: MeshStandardMaterial,
+  options?: {
+    height?: number;
+  }
 ): {
   group: Group;
   material: MeshStandardMaterial;
 } {
   const wallMaterial = material ?? createWallMaterial(viewDirUniform);
+  const wallHeight =
+    typeof options?.height === "number" && Number.isFinite(options.height)
+      ? Math.max(0.2, options.height)
+      : WALL_HEIGHT;
   const group = new Group();
 
   for (const segment of resolveBoundaryEdgeSegments(rooms)) {
-    const mesh = createWallMesh(segment.a, segment.b, WALL_HEIGHT, WALL_THICKNESS, wallMaterial);
+    const mesh = createWallMesh(segment.a, segment.b, wallHeight, WALL_THICKNESS, wallMaterial);
     if (mesh) {
       group.add(mesh);
     }

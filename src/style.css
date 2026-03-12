@@ -7,6 +7,12 @@
   display: block;
 }
 
+.ha-card-reset.card-transparent {
+  --ha-card-background: transparent;
+  --ha-card-box-shadow: none;
+  --ha-card-border-width: 0;
+}
+
 .wrap {
   padding: 12px;
 }
@@ -28,8 +34,13 @@
   max-height: 70vh;
   border-radius: 12px;
   overflow: hidden;
-  background: color-mix(in srgb, var(--secondary-background-color) 90%, transparent);
-  border: 1px solid color-mix(in srgb, var(--divider-color) 60%, transparent);
+  background: var(--three-surface-bg, color-mix(in srgb, var(--secondary-background-color) 90%, transparent));
+  border: 1px solid var(--three-surface-border, color-mix(in srgb, var(--divider-color) 60%, transparent));
+}
+
+.ha-card-reset.card-transparent .three-surface {
+  --three-surface-bg: transparent;
+  --three-surface-border: transparent;
 }
 
 .three-surface canvas {

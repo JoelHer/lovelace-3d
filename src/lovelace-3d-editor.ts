@@ -8,6 +8,7 @@ const ROOMS_KEY = "rooms";
 const FLOATERS_KEY = "floaters";
 const FLOATER_OVERLAP_KEY = "floater_overlap";
 const CAMERA_KEY = "camera";
+const RENDERER_KEY = "renderer";
 const HEATMAPS_KEY = "heatmaps";
 const NAVBAR_KEY = "navbar";
 const ACTIONS_KEY = "room_popup_actions";
@@ -29,6 +30,10 @@ const DEFAULT_CAMERA_POSITION: Point3Editor = { x: 3, y: 6, z: 10 };
 const DEFAULT_CAMERA_ROTATION = { x: -38.66, y: 0 };
 const DEFAULT_CAMERA_TARGET: Point3Editor = { x: 3, y: 0, z: 2.5 };
 const DEFAULT_CAMERA_MAX_ZOOM_OUT = 60;
+const DEFAULT_RENDERER_WALL_OPACITY = 1;
+const DEFAULT_RENDERER_WALL_HEIGHT = 2.6;
+const DEFAULT_RENDERER_GRID_ENABLED = true;
+const DEFAULT_RENDERER_CARD_TRANSPARENT = false;
 const DEFAULT_FLOATER_OVERLAP_DISTANCE = 40;
 const DEFAULT_FLOATER_OVERLAP_MIN_ITEMS = 2;
 const DEFAULT_FLOATER_OVERLAP_EXPAND_DURATION_MS = 120;
@@ -122,6 +127,18 @@ type CameraEditorConfig = {
   extra: EditorRecord;
 };
 
+type RendererEditorConfig = {
+  wallColor: string;
+  wallOpacity: number;
+  wallHeight: number;
+  gridEnabled: boolean;
+  gridColor: string;
+  backgroundColor: string;
+  cardTransparent: boolean;
+  cardBackgroundColor: string;
+  extra: EditorRecord;
+};
+
 type NavbarPosition = "left" | "right" | "top" | "bottom";
 type NavbarAction = "toggle-heatmap" | "set-floater-group";
 
@@ -169,10 +186,12 @@ class Lovelace3DEditor extends LitElement {
   private _floaterOverlap: FloaterOverlapEditorConfig = this._createDefaultFloaterOverlapEditorConfig();
   private _heatmap: HeatmapEditorConfig = this._createDefaultHeatmapEditorConfig();
   private _camera: CameraEditorConfig = this._createDefaultCameraEditorConfig();
+  private _renderer: RendererEditorConfig = this._createDefaultRendererEditorConfig();
   private _navbar: NavbarEditorConfig = this._createDefaultNavbarEditorConfig();
   private _actions: PopupActionEditorEntry[] = [];
   private _actionsError = "";
   private _cameraConfigured = false;
+  private _rendererConfigured = false;
   private _floaterOverlapConfigured = false;
   private _heatmapsConfigured = false;
   private _navbarConfigured = false;
@@ -186,10 +205,12 @@ class Lovelace3DEditor extends LitElement {
     _floaterOverlap: { state: true },
     _heatmap: { state: true },
     _camera: { state: true },
+    _renderer: { state: true },
     _navbar: { state: true },
     _actions: { state: true },
     _actionsError: { state: true },
     _cameraConfigured: { state: true },
+    _rendererConfigured: { state: true },
     _floaterOverlapConfigured: { state: true },
     _heatmapsConfigured: { state: true },
     _navbarConfigured: { state: true },
@@ -356,10 +377,12 @@ class Lovelace3DEditor extends LitElement {
     this._floaterOverlap = this._parseFloaterOverlap(this._config[FLOATER_OVERLAP_KEY]);
     this._heatmap = this._parseHeatmap(this._config[HEATMAPS_KEY]);
     this._camera = this._parseCamera(this._config[CAMERA_KEY]);
+    this._renderer = this._parseRenderer(this._config[RENDERER_KEY]);
     this._navbar = this._parseNavbar(this._config[NAVBAR_KEY]);
     this._actions = this._parseActions(this._config[ACTIONS_KEY] ?? this._config[LEGACY_ACTIONS_KEY]);
     this._actionsError = "";
     this._cameraConfigured = this._config[CAMERA_KEY] !== undefined;
+    this._rendererConfigured = this._config[RENDERER_KEY] !== undefined;
     this._floaterOverlapConfigured = this._config[FLOATER_OVERLAP_KEY] !== undefined;
     this._heatmapsConfigured = this._config[HEATMAPS_KEY] !== undefined;
     this._navbarConfigured = this._config[NAVBAR_KEY] !== undefined;
@@ -423,6 +446,49 @@ class Lovelace3DEditor extends LitElement {
                     ]}
                     .computeLabel=${this._computeLabel}
                     @value-changed=${this._cameraChanged}
+                  ></ha-form>
+                </div>
+              </ha-expansion-panel>
+            </section>
+            <section class="item-panel">
+              <ha-expansion-panel
+                outlined
+                ?expanded=${this._isPanelExpanded("renderer-visuals", true)}
+                @expanded-changed=${(ev: Event) => {
+                  this._panelExpandedChanged("renderer-visuals", ev);
+                }}
+              >
+                <h5 slot="header" class="item-header">
+                  <span class="section-title-label">
+                    <ha-icon .icon=${"mdi:palette-outline"}></ha-icon>
+                    Visuals
+                  </span>
+                </h5>
+                <div class="item-content">
+                  <ha-form
+                    .hass=${this.hass}
+                    .data=${{
+                      wall_color: this._renderer.wallColor,
+                      wall_opacity: this._renderer.wallOpacity,
+                      wall_height: this._renderer.wallHeight,
+                      grid_enabled: this._renderer.gridEnabled,
+                      grid_color: this._renderer.gridColor,
+                      background_color: this._renderer.backgroundColor,
+                      card_transparent: this._renderer.cardTransparent,
+                      card_background_color: this._renderer.cardBackgroundColor,
+                    }}
+                    .schema=${[
+                      { name: "wall_color", selector: { text: {} } },
+                      { name: "wall_opacity", selector: { number: { min: 0, max: 1, step: 0.01 } } },
+                      { name: "wall_height", selector: { number: { min: 0.2, max: 10, step: 0.1 } } },
+                      { name: "grid_enabled", selector: { boolean: {} } },
+                      { name: "grid_color", selector: { text: {} } },
+                      { name: "background_color", selector: { text: {} } },
+                      { name: "card_transparent", selector: { boolean: {} } },
+                      { name: "card_background_color", selector: { text: {} } },
+                    ]}
+                    .computeLabel=${this._computeLabel}
+                    @value-changed=${this._rendererChanged}
                   ></ha-form>
                 </div>
               </ha-expansion-panel>
@@ -1245,6 +1311,20 @@ class Lovelace3DEditor extends LitElement {
         return "Rotation Y (deg)";
       case "max_zoom_out":
         return "Max Zoom Out";
+      case "wall_color":
+        return "Wall Color";
+      case "wall_opacity":
+        return "Wall Opacity";
+      case "wall_height":
+        return "Wall Height";
+      case "grid_enabled":
+        return "Show Grid";
+      case "grid_color":
+        return "Grid Color";
+      case "card_transparent":
+        return "Card Transparent";
+      case "card_background_color":
+        return "Card Background Color";
       case "transparent":
         return "Transparent";
       case "background_color":
@@ -1302,6 +1382,30 @@ class Lovelace3DEditor extends LitElement {
         y: this._toFinite(value.rotation_y, this._camera.rotation.y),
       }),
       maxZoomOut: Math.round(this._clamp(this._toFinite(value.max_zoom_out, this._camera.maxZoomOut), 2, 300)),
+    };
+    this._emitConfigFromEditor();
+  };
+
+  private _rendererChanged = (ev: CustomEvent) => {
+    const value = this._asRecord(ev.detail?.value) ?? {};
+
+    this._rendererConfigured = true;
+    this._renderer = {
+      ...this._renderer,
+      wallColor: this._nextTextValue(value, "wall_color", this._renderer.wallColor),
+      wallOpacity: this._clamp(this._toFinite(value.wall_opacity, this._renderer.wallOpacity), 0, 1),
+      wallHeight: this._clamp(this._toFinite(value.wall_height, this._renderer.wallHeight), 0.2, 10),
+      gridEnabled: this._hasValueKey(value, "grid_enabled") ? value.grid_enabled !== false : this._renderer.gridEnabled,
+      gridColor: this._nextTextValue(value, "grid_color", this._renderer.gridColor),
+      backgroundColor: this._nextTextValue(value, "background_color", this._renderer.backgroundColor),
+      cardTransparent: this._hasValueKey(value, "card_transparent")
+        ? value.card_transparent !== false
+        : this._renderer.cardTransparent,
+      cardBackgroundColor: this._nextTextValue(
+        value,
+        "card_background_color",
+        this._renderer.cardBackgroundColor
+      ),
     };
     this._emitConfigFromEditor();
   };
@@ -1762,6 +1866,10 @@ class Lovelace3DEditor extends LitElement {
     if (camera) nextConfig[CAMERA_KEY] = camera;
     else delete nextConfig[CAMERA_KEY];
 
+    const renderer = this._serializeRenderer();
+    if (renderer) nextConfig[RENDERER_KEY] = renderer;
+    else delete nextConfig[RENDERER_KEY];
+
     const rooms = this._serializeRooms();
     if (rooms.length > 0) nextConfig[ROOMS_KEY] = rooms;
     else delete nextConfig[ROOMS_KEY];
@@ -1801,6 +1909,35 @@ class Lovelace3DEditor extends LitElement {
     };
 
     const hasContent = this._cameraConfigured || Object.keys(this._camera.extra).length > 0;
+    return hasContent ? next : null;
+  }
+
+  private _serializeRenderer(): EditorRecord | null {
+    const next: EditorRecord = {
+      ...this._renderer.extra,
+      wall_opacity: this._renderer.wallOpacity,
+      wall_height: this._renderer.wallHeight,
+      grid_enabled: this._renderer.gridEnabled,
+      card_transparent: this._renderer.cardTransparent,
+    };
+
+    const wallColor = this._renderer.wallColor.trim();
+    if (wallColor) next.wall_color = wallColor;
+    else delete next.wall_color;
+
+    const gridColor = this._renderer.gridColor.trim();
+    if (gridColor) next.grid_color = gridColor;
+    else delete next.grid_color;
+
+    const backgroundColor = this._renderer.backgroundColor.trim();
+    if (backgroundColor) next.background_color = backgroundColor;
+    else delete next.background_color;
+
+    const cardBackgroundColor = this._renderer.cardBackgroundColor.trim();
+    if (cardBackgroundColor) next.card_background_color = cardBackgroundColor;
+    else delete next.card_background_color;
+
+    const hasContent = this._rendererConfigured || Object.keys(this._renderer.extra).length > 0;
     return hasContent ? next : null;
   }
 
@@ -2213,6 +2350,79 @@ class Lovelace3DEditor extends LitElement {
     };
   }
 
+  private _parseRenderer(rawRenderer: unknown): RendererEditorConfig {
+    const source = this._asRecord(rawRenderer);
+
+    return {
+      wallColor: String(source?.wall_color ?? source?.wallColor ?? source?.walls_color ?? source?.wallsColor ?? "").trim(),
+      wallOpacity: this._clamp(
+        this._toFinite(source?.wall_opacity ?? source?.wallOpacity ?? source?.wall_alpha ?? source?.wallAlpha, DEFAULT_RENDERER_WALL_OPACITY),
+        0,
+        1
+      ),
+      wallHeight: this._clamp(
+        this._toFinite(source?.wall_height ?? source?.wallHeight ?? source?.walls_height ?? source?.wallsHeight, DEFAULT_RENDERER_WALL_HEIGHT),
+        0.2,
+        10
+      ),
+      gridEnabled: (source?.grid_enabled ?? source?.gridEnabled ?? source?.grid ?? source?.show_grid) !== false,
+      gridColor: String(source?.grid_color ?? source?.gridColor ?? "").trim(),
+      backgroundColor: String(
+        source?.background_color ??
+          source?.backgroundColor ??
+          source?.background ??
+          source?.scene_background_color ??
+          source?.sceneBackgroundColor ??
+          ""
+      ).trim(),
+      cardTransparent:
+        (source?.card_transparent ??
+          source?.cardTransparent ??
+          source?.transparent_card ??
+          source?.transparentCard) === true,
+      cardBackgroundColor: String(
+        source?.card_background_color ??
+          source?.cardBackgroundColor ??
+          source?.card_background ??
+          source?.cardBackground ??
+          ""
+      ).trim(),
+      extra: this._withoutKeys(source, [
+        "wall_color",
+        "wallColor",
+        "walls_color",
+        "wallsColor",
+        "wall_opacity",
+        "wallOpacity",
+        "wall_alpha",
+        "wallAlpha",
+        "wall_height",
+        "wallHeight",
+        "walls_height",
+        "wallsHeight",
+        "grid_enabled",
+        "gridEnabled",
+        "grid",
+        "show_grid",
+        "grid_color",
+        "gridColor",
+        "background_color",
+        "backgroundColor",
+        "background",
+        "scene_background_color",
+        "sceneBackgroundColor",
+        "card_transparent",
+        "cardTransparent",
+        "transparent_card",
+        "transparentCard",
+        "card_background_color",
+        "cardBackgroundColor",
+        "card_background",
+        "cardBackground",
+      ]),
+    };
+  }
+
   private _hasLegacyCameraTarget(source: EditorRecord | null | undefined): boolean {
     if (!source) return false;
     return (
@@ -2527,6 +2737,20 @@ class Lovelace3DEditor extends LitElement {
       position: { ...DEFAULT_CAMERA_POSITION },
       rotation: { ...DEFAULT_CAMERA_ROTATION },
       maxZoomOut: DEFAULT_CAMERA_MAX_ZOOM_OUT,
+      extra: {},
+    };
+  }
+
+  private _createDefaultRendererEditorConfig(): RendererEditorConfig {
+    return {
+      wallColor: "",
+      wallOpacity: DEFAULT_RENDERER_WALL_OPACITY,
+      wallHeight: DEFAULT_RENDERER_WALL_HEIGHT,
+      gridEnabled: DEFAULT_RENDERER_GRID_ENABLED,
+      gridColor: "",
+      backgroundColor: "",
+      cardTransparent: DEFAULT_RENDERER_CARD_TRANSPARENT,
+      cardBackgroundColor: "",
       extra: {},
     };
   }

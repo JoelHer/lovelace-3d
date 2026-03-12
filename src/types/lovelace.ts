@@ -6,6 +6,7 @@ export type LovelaceConfig = {
   floaters?: unknown;
   floater_overlap?: unknown;
   camera?: unknown;
+  renderer?: unknown;
   heatmaps?: unknown;
   navbar?: unknown;
   room_popup_actions?: unknown;

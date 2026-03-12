@@ -44,6 +44,15 @@ camera:
   position: [3, 6, 10] # camera world position (x, y, z)
   rotation: [-38.66, 0] # degrees: [x, y]
   max_zoom_out: 60
+renderer:
+  wall_color: "#ffffff"
+  wall_opacity: 0.9
+  wall_height: 2.6
+  grid_enabled: true
+  grid_color: "#888888"
+  background_color: "#10131a"
+  card_transparent: false
+  card_background_color: ""
 heatmaps:
   enabled: true
   sensors:
