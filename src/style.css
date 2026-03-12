@@ -90,7 +90,8 @@
 
 .navbar-layer.vertical .control-navbar {
   flex-direction: column;
-  width: 84px;
+  width: fit-content;
+  align-items: center;
 }
 
 .navbar-layer.horizontal .control-navbar {
@@ -120,6 +121,26 @@
   left: 50%;
   bottom: var(--navbar-offset-y, 16px);
   transform: translateX(-50%);
+}
+
+.navbar-layer.pos-top-left .control-navbar {
+  left: var(--navbar-offset-x, 14px);
+  top: var(--navbar-offset-y, 16px);
+}
+
+.navbar-layer.pos-top-right .control-navbar {
+  right: var(--navbar-offset-x, 14px);
+  top: var(--navbar-offset-y, 16px);
+}
+
+.navbar-layer.pos-bottom-left .control-navbar {
+  left: var(--navbar-offset-x, 14px);
+  bottom: var(--navbar-offset-y, 16px);
+}
+
+.navbar-layer.pos-bottom-right .control-navbar {
+  right: var(--navbar-offset-x, 14px);
+  bottom: var(--navbar-offset-y, 16px);
 }
 
 .navbar-btn {

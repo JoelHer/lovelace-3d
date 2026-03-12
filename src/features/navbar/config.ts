@@ -1,4 +1,12 @@
-export type NavbarPosition = "left" | "right" | "top" | "bottom";
+export type NavbarPosition =
+  | "left"
+  | "right"
+  | "top"
+  | "bottom"
+  | "top-left"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-right";
 export type NavbarAction = "toggle-heatmap" | "set-floater-group";
 
 export type NavbarItemConfig = {
@@ -44,10 +52,14 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function parseNavbarPosition(rawValue: unknown): NavbarPosition {
-  const normalized = String(rawValue ?? "left").trim().toLowerCase();
+  const normalized = String(rawValue ?? "left").trim().toLowerCase().replace(/_/g, "-");
   if (normalized === "right") return "right";
   if (normalized === "top") return "top";
   if (normalized === "bottom") return "bottom";
+  if (normalized === "top-left") return "top-left";
+  if (normalized === "top-right") return "top-right";
+  if (normalized === "bottom-left") return "bottom-left";
+  if (normalized === "bottom-right") return "bottom-right";
   return "left";
 }
 

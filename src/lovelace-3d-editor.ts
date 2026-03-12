@@ -139,7 +139,15 @@ type RendererEditorConfig = {
   extra: EditorRecord;
 };
 
-type NavbarPosition = "left" | "right" | "top" | "bottom";
+type NavbarPosition =
+  | "left"
+  | "right"
+  | "top"
+  | "bottom"
+  | "top-left"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-right";
 type NavbarAction = "toggle-heatmap" | "set-floater-group";
 
 type NavbarItemEditorEntry = {
@@ -1008,6 +1016,10 @@ class Lovelace3DEditor extends LitElement {
                         { label: "Right", value: "right" },
                         { label: "Top", value: "top" },
                         { label: "Bottom", value: "bottom" },
+                        { label: "Top Left", value: "top-left" },
+                        { label: "Top Right", value: "top-right" },
+                        { label: "Bottom Left", value: "bottom-left" },
+                        { label: "Bottom Right", value: "bottom-right" },
                       ],
                     },
                   },
@@ -2918,10 +2930,14 @@ class Lovelace3DEditor extends LitElement {
   }
 
   private _normalizeNavbarPosition(value: unknown): NavbarPosition {
-    const normalized = String(value ?? "").trim().toLowerCase();
+    const normalized = String(value ?? "").trim().toLowerCase().replace(/_/g, "-");
     if (normalized === "right") return "right";
     if (normalized === "top") return "top";
     if (normalized === "bottom") return "bottom";
+    if (normalized === "top-left") return "top-left";
+    if (normalized === "top-right") return "top-right";
+    if (normalized === "bottom-left") return "bottom-left";
+    if (normalized === "bottom-right") return "bottom-right";
     return "left";
   }
 
