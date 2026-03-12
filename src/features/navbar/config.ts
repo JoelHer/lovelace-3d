@@ -59,9 +59,10 @@ function parseNavbarAction(rawValue: unknown): NavbarAction | null {
 }
 
 function parseNavbarItems(rawItems: unknown): NavbarItemConfig[] {
-  if (!Array.isArray(rawItems)) {
+  if (rawItems === undefined || rawItems === null) {
     return DEFAULT_ITEMS.map((item) => ({ ...item }));
   }
+  if (!Array.isArray(rawItems)) return [];
 
   const parsed: NavbarItemConfig[] = [];
   for (let index = 0; index < rawItems.length; index += 1) {
@@ -93,10 +94,6 @@ function parseNavbarItems(rawItems: unknown): NavbarItemConfig[] {
       action,
       floaterGroup,
     });
-  }
-
-  if (parsed.length === 0) {
-    return DEFAULT_ITEMS.map((item) => ({ ...item }));
   }
 
   return parsed;

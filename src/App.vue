@@ -596,17 +596,22 @@ const navbarStyle = computed<Record<string, string>>(() => {
 });
 
 function isNavbarItemActive(item: NavbarItemConfig): boolean {
+  const heatmapModeActive = !!heatmapRenderData.value && heatmapVisible.value;
   if (item.action === "toggle-heatmap") {
-    return !!heatmapRenderData.value && heatmapVisible.value;
+    return heatmapModeActive;
   }
   if (item.action === "set-floater-group") {
-    return activeFloaterGroup.value === (item.floaterGroup ?? "all");
+    return !heatmapModeActive && activeFloaterGroup.value === (item.floaterGroup ?? "all");
   }
   return false;
 }
 
 function onNavbarItemPressed(item: NavbarItemConfig) {
   if (item.action === "toggle-heatmap") {
+    const heatmapModeActive = !!heatmapRenderData.value && heatmapVisible.value;
+    if (heatmapModeActive && renderedNavbarItems.value.length <= 1) {
+      return;
+    }
     heatmapVisible.value = !heatmapVisible.value;
     if (heatmapVisible.value) {
       closeFloaterPopup();
@@ -1284,4 +1289,18 @@ watch(
 watch(heatmapRenderData, () => {
   updateHeatmapOverlay();
 });
+
+watch(
+  () => renderedNavbarItems.value.length,
+  (itemCount) => {
+    if (itemCount > 0) return;
+    if (activeFloaterGroup.value !== "all") {
+      activeFloaterGroup.value = "all";
+    }
+    if (heatmapVisible.value) {
+      heatmapVisible.value = false;
+    }
+  },
+  { immediate: true }
+);
 </script>
