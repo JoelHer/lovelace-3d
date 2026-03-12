@@ -1,81 +1,211 @@
-# lovelace-3d
+# Lovelace 3D
 
-A Home Assistant custom Lovelace card that renders a 3D floorplan and room action popups.
+A Home Assistant custom Lovelace card that renders a 3D floorplan with room popups, floating controls, heatmaps, and a configurable navbar.
 
-## Installation (HACS Custom Repository)
+**Please note, that this card is still early in development, and therefore may conatin bugs, and is not feature-complete**
+
+## Features
+
+- 3D room polygons with clickable room action popups
+- Floating entity controls (`toggle`, `more-info`, `popup`)
+- Overlap grouping for dense floater layouts
+- Sensor heatmap overlay with configurable ranges/colors
+- Camera and renderer tuning (wall height, opacity, grid, background)
+- Optional floating navbar (heatmap toggle, floater group filters)
+- Built-in visual editor (`show visual editor` in Lovelace)
+
+## Requirements
+
+- Home Assistant with Lovelace dashboards
+- HACS (recommended for install/updates)
+- Existing HA areas/entities referenced in your YAML
+
+## Installation (HACS, recommended)
 
 1. Open HACS in Home Assistant.
-2. Go to the 3-dot menu -> `Custom repositories`.
-3. Add this repository URL and choose the category `Dashboard`.
-4. Install `Lovelace 3D` from HACS and restart Home Assistant.
-5. Ensure the Lovelace resource exists (HACS often adds this automatically):
+2. Open the top-right menu, then `Custom repositories`.
+3. Add this repository URL `https://github.com/JoelHer/lovelace-3d`.
+4. Select category `Dashboard`.
+5. Install `Lovelace 3D`.
+6. Restart Home Assistant.
+
+## Installation (manual)
+
+1. Download `lovelace-3d.js` from `dist/` (or from a release artifact).
+2. Copy it to:
 
 ```text
-/hacsfiles/lovelace-3d/lovelace-3d.js
+/config/www/lovelace-3d/lovelace-3d.js
 ```
 
-## Project Structure
+3. Add this Lovelace resource:
 
-- `src/lovelace-3d.ts`: custom element entrypoint and card registration.
-- `src/lovelace-3d-editor.ts`: Lovelace visual editor (YAML rooms/actions).
-- `src/composables/useAreaRegistry.ts`: loads and caches HA area registry.
-- `src/components/*`: presentational Vue components.
-- `src/three/*`: all Three.js geometry helpers and type definitions.
+```yaml
+url: /local/lovelace-3d/lovelace-3d.js
+type: module
+```
 
-## Card Config
+4. Restart Home Assistant.
+5. Hard-refresh your browser (`Ctrl+F5` / `Cmd+Shift+R`).
+
+## Add The Card
+
+In a dashboard card config, use:
+
+```yaml
+type: custom:lovelace-3d
+rooms: []
+```
+
+Then switch to visual editor or paste a full YAML config.
+
+## Quickstart YAML (Normal Floorplan Example)
+
+Replace `area` IDs and entity IDs with your own Home Assistant values. Rooms will not be displayed, until a valid area is given. The Heatmap will also not work until at least one valid sensor is given.
 
 ```yaml
 type: custom:lovelace-3d
 room_popup_actions:
-  - service: light.turn_on
+  - id: action_1
     label: Turn lights on
+    service: light.turn_on
+    close_on_run: true
     target:
       area_id: "{{ room.area_id }}"
 rooms:
+  - area: flur
+    name: Flur
+    polygon:
+      - - 2
+        - 0
+      - - 6
+        - 0
+      - - 6
+        - 2
+      - - 2
+        - 2
+  - area: bedroom
+    name: Bedroom
+    polygon:
+      - - 0
+        - 0
+      - - 2
+        - 0
+      - - 2
+        - 4.5
+      - - 0
+        - 4.5
+  - area: bathroom
+    name: Bathroom
+    polygon:
+      - - 2
+        - 2
+      - - 3.8
+        - 2
+      - - 3.8
+        - 4.5
+      - - 2
+        - 4.5
   - area: kitchen
     name: Kitchen
     polygon:
-      - [0, 0]
-      - [4, 0]
-      - [4, 3]
-      - [0, 3]
+      - - 3.8
+        - 2
+      - - 8
+        - 2
+      - - 8
+        - 5.5
+      - - 3.8
+        - 5.5
+  - area: livingroom
+    name: Livingroom
+    polygon:
+      - - 0
+        - 0
+      - - 2
+        - 0
+      - - 2
+        - -1
+      - - 6
+        - -1
+      - - 6
+        - 0
+      - - 8
+        - 0
+      - - 8
+        - -3.8
+      - - 0
+        - -3.8
 floaters:
   - id: kitchen-light
     entity: light.kitchen
+    position:
+      - 6.6
+      - 1.2
+      - 3.7
+    tap_action: toggle
+    hold_action: popup
     icon: mdi:lightbulb
     group: light
-    position: [2, 1.2, 1.5] # x, y, z in the same world-space as room polygons
-    tap_action: toggle # toggle | more-info | popup
-    hold_action: popup # toggle | more-info | popup
+  - id: floater_2
+    entity: switch.some_switch
+    position:
+      - 4.1
+      - 1.2
+      - 1
+    tap_action: toggle
+    hold_action: more-info
+    icon: mdi:power-socket-eu
+    group: switch
 floater_overlap:
   enabled: true
   distance_px: 40
   min_items: 2
   expand_duration_ms: 120
 camera:
-  position: [3, 6, 10] # camera world position (x, y, z)
-  rotation: [-38.66, 0] # degrees: [x, y]
+  position:
+    - 4
+    - 7
+    - 11
+  rotation:
+    - -35
+    - 0
   max_zoom_out: 60
 renderer:
-  wall_color: "#ffffff"
   wall_opacity: 0.9
   wall_height: 2.6
   grid_enabled: true
+  card_transparent: false
+  wall_color: "#ffffff"
   grid_color: "#888888"
   background_color: "#10131a"
-  card_transparent: false
-  card_background_color: ""
 heatmaps:
   enabled: true
+  default_visible: true
+  radius: 2.8
+  weight: 1
+  opacity: 0.72
+  resolution: 192
+  blur: 0.55
   sensors:
-    - entity: sensor.kitchen_temperature
-      position: [2, 1.2, 1.5]
-    - entity: sensor.living_temperature
-      position: [5, 1.2, 2.2]
-  # Optional fixed range. If omitted, range is auto-derived from sensors.
+    - id: heatmap_sensor_1
+      entity: sensor.kitchen_temperature
+      position:
+        - 6.4
+        - 1.2
+        - 3.8
+      radius: 2.8
+      weight: 1
+    - id: heatmap_sensor_2
+      entity: sensor.living_temperature
+      position:
+        - 4.5
+        - 1.2
+        - -2.2
+      radius: 2.8
+      weight: 1
   min: 16
   max: 28
-  # Configure what is cold/warm/hot.
   color_ranges:
     - value: 16
       color: "#1652f6"
@@ -88,26 +218,38 @@ heatmaps:
     - value: 28
       color: "#fa4a30"
 navbar:
+  enabled: true
+  position: left
+  transparent: true
+  opacity: 0.58
+  blur: 10
+  offset_x: 14
+  offset_y: 16
   items:
-    - action: toggle-heatmap
+    - id: navbar_item_1
       label: Heatmap
       icon: mdi:thermometer
-    - action: set-floater-group
-      floater_group: light
+      action: toggle-heatmap
+    - id: navbar_item_2
       label: Lights
       icon: mdi:lightbulb-group
-    - action: set-floater-group
-      floater_group: all
+      action: set-floater-group
+      floater_group: light
+    - id: navbar_item_3
+      label: Switches
+      icon: mdi:power-socket-eu
+      action: set-floater-group
+      floater_group: switch
+    - id: navbar_item_4
       label: All
       icon: mdi:view-grid
+      action: set-floater-group
+      floater_group: all
 ```
 
-`heatmaps.color_ranges` accepts both object and tuple forms:
+## Room Popup Template Tokens
 
-- `{ value: 22, color: "#49db78" }`
-- `[22, "#49db78"]`
-
-Supported template tokens in popup actions:
+These tokens are supported in `room_popup_actions` values:
 
 - `{{ room.id }}`
 - `{{ room.name }}`
@@ -115,20 +257,31 @@ Supported template tokens in popup actions:
 - `{{ click.x }}`, `{{ click.y }}`
 - `{{ click.world_x }}`, `{{ click.world_y }}`, `{{ click.world_z }}`
 
-## Adding Features
+## Top-Level Config Keys
 
-1. New room/action parsing behavior:
-   edit `src/features/rooms/roomConfig.ts`.
-2. New popup template tokens:
-   edit `src/features/rooms/actionTemplates.ts`.
-3. New 3D visuals (floor/walls/material effects):
-   edit `src/three/roomMeshes.ts` and `src/three/walls.ts`.
-4. New floating 3D-anchored controls:
-   edit `src/features/floaters/config.ts` and `src/components/Floater*.vue`.
-5. New UI behaviors:
-   edit `src/App.vue` and presentational components under `src/components`.
-6. New Lovelace editor fields:
-   edit `src/lovelace-3d-editor.ts`.
+- `rooms`: room polygons and names (required)
+- `room_popup_actions`: global popup actions used for all rooms
+- `floaters`: 3D entity buttons
+- `floater_overlap`: overlap grouping behavior
+- `camera`: camera position/rotation/zoom limits
+- `renderer`: wall/grid/background/card styling
+- `heatmaps`: sensor overlays and color mapping
+- `navbar`: floating control bar
+
+## Troubleshooting
+
+- Card shows as red error card:
+  - Check resource URL and `type: module`
+  - Confirm file exists at `/hacsfiles/...` or `/local/...`
+- Room click popup does nothing:
+  - Verify `room_popup_actions[].service` is `domain.service`
+  - Check Home Assistant logs for service call errors
+- Empty floorplan:
+  - Confirm every room has at least 3 polygon points
+  - Confirm each `rooms[].area` exists in HA Areas
+- Changes do not appear:
+  - Hard refresh browser cache
+  - Add a version query to resource URL (for manual installs)
 
 ## Development
 
@@ -138,7 +291,7 @@ npm run dev
 npm run build
 ```
 
-`npm run build` creates the HACS artifact at `dist/lovelace-3d.js`.
+`npm run build` outputs the distributable file at `dist/lovelace-3d.js`.
 
 To build directly into a Home Assistant `www` folder for local testing:
 
