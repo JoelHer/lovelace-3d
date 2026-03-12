@@ -1064,10 +1064,10 @@ class Lovelace3DEditor extends LitElement {
     action();
   }
 
-  private _isPanelExpanded(panelId: string, fallback: boolean): boolean {
+  private _isPanelExpanded(panelId: string, _fallback: boolean): boolean {
     const value = this._panelExpanded[panelId];
     if (typeof value === "boolean") return value;
-    return fallback;
+    return false;
   }
 
   private _panelExpandedChanged(panelId: string, event: Event) {
@@ -1210,8 +1210,8 @@ class Lovelace3DEditor extends LitElement {
     const nextRooms = [...this._rooms];
     nextRooms[index] = {
       ...room,
-      area: String(value.area ?? room.area).trim(),
-      name: String(value.name ?? room.name).trim(),
+      area: this._nextTextValue(value, "area", room.area),
+      name: this._nextTextValue(value, "name", room.name),
     };
 
     this._rooms = nextRooms;
@@ -1300,11 +1300,11 @@ class Lovelace3DEditor extends LitElement {
     const nextFloaters = [...this._floaters];
     nextFloaters[index] = {
       ...floater,
-      id: String(value.id ?? floater.id).trim(),
-      entity: String(value.entity ?? floater.entity).trim(),
-      label: String(value.label ?? floater.label).trim(),
-      icon: String(value.icon ?? floater.icon).trim(),
-      group: String(value.group ?? floater.group).trim().toLowerCase(),
+      id: this._nextTextValue(value, "id", floater.id),
+      entity: this._nextTextValue(value, "entity", floater.entity),
+      label: this._nextTextValue(value, "label", floater.label),
+      icon: this._nextTextValue(value, "icon", floater.icon),
+      group: this._nextTextValue(value, "group", floater.group).toLowerCase(),
       tapAction,
       holdAction,
     };
@@ -1337,10 +1337,12 @@ class Lovelace3DEditor extends LitElement {
     this._heatmapsConfigured = true;
     this._heatmap = {
       ...this._heatmap,
-      enabled: value.enabled !== false,
-      defaultVisible: value.default_visible !== false,
-      minValue: String(value.min_value ?? this._heatmap.minValue).trim(),
-      maxValue: String(value.max_value ?? this._heatmap.maxValue).trim(),
+      enabled: this._hasValueKey(value, "enabled") ? value.enabled !== false : this._heatmap.enabled,
+      defaultVisible: this._hasValueKey(value, "default_visible")
+        ? value.default_visible !== false
+        : this._heatmap.defaultVisible,
+      minValue: this._nextTextValue(value, "min_value", this._heatmap.minValue),
+      maxValue: this._nextTextValue(value, "max_value", this._heatmap.maxValue),
       radius: this._clamp(this._toFinite(value.radius, this._heatmap.radius), 0.25, 30),
       weight: this._clamp(this._toFinite(value.weight, this._heatmap.weight), 0.05, 10),
       opacity: this._clamp(this._toFinite(value.opacity, this._heatmap.opacity), 0.05, 1),
@@ -1377,7 +1379,7 @@ class Lovelace3DEditor extends LitElement {
     colorRanges[index] = {
       ...colorRange,
       value: this._toFinite(value.value, colorRange.value),
-      color: String(value.color ?? colorRange.color).trim(),
+      color: this._nextTextValue(value, "color", colorRange.color),
     };
 
     this._heatmapsConfigured = true;
@@ -1424,10 +1426,10 @@ class Lovelace3DEditor extends LitElement {
     const sensors = [...this._heatmap.sensors];
     sensors[index] = {
       ...sensor,
-      id: String(value.id ?? sensor.id).trim(),
-      entity: String(value.entity ?? sensor.entity).trim(),
-      label: String(value.label ?? sensor.label).trim(),
-      valueAttribute: String(value.value_attribute ?? sensor.valueAttribute).trim(),
+      id: this._nextTextValue(value, "id", sensor.id),
+      entity: this._nextTextValue(value, "entity", sensor.entity),
+      label: this._nextTextValue(value, "label", sensor.label),
+      valueAttribute: this._nextTextValue(value, "value_attribute", sensor.valueAttribute),
       radius: this._clamp(this._toFinite(value.radius, sensor.radius), 0.25, 30),
       weight: this._clamp(this._toFinite(value.weight, sensor.weight), 0.05, 10),
     };
@@ -1463,15 +1465,19 @@ class Lovelace3DEditor extends LitElement {
     this._navbarConfigured = true;
     this._navbar = {
       ...this._navbar,
-      enabled: value.enabled !== false,
-      position: this._normalizeNavbarPosition(value.position),
-      transparent: value.transparent !== false,
+      enabled: this._hasValueKey(value, "enabled") ? value.enabled !== false : this._navbar.enabled,
+      position: this._hasValueKey(value, "position")
+        ? this._normalizeNavbarPosition(value.position)
+        : this._navbar.position,
+      transparent: this._hasValueKey(value, "transparent")
+        ? value.transparent !== false
+        : this._navbar.transparent,
       opacity: this._clamp(this._toFinite(value.opacity, this._navbar.opacity), 0.05, 1),
       blur: this._clamp(this._toFinite(value.blur, this._navbar.blur), 0, 28),
-      backgroundColor: String(value.background_color ?? this._navbar.backgroundColor).trim(),
-      borderColor: String(value.border_color ?? this._navbar.borderColor).trim(),
-      textColor: String(value.text_color ?? this._navbar.textColor).trim(),
-      iconColor: String(value.icon_color ?? this._navbar.iconColor).trim(),
+      backgroundColor: this._nextTextValue(value, "background_color", this._navbar.backgroundColor),
+      borderColor: this._nextTextValue(value, "border_color", this._navbar.borderColor),
+      textColor: this._nextTextValue(value, "text_color", this._navbar.textColor),
+      iconColor: this._nextTextValue(value, "icon_color", this._navbar.iconColor),
       offsetX: Math.round(this._clamp(this._toFinite(value.offset_x, this._navbar.offsetX), 0, 128)),
       offsetY: Math.round(this._clamp(this._toFinite(value.offset_y, this._navbar.offsetY), 0, 128)),
     };
@@ -1519,13 +1525,13 @@ class Lovelace3DEditor extends LitElement {
     const nextItems = [...this._navbar.items];
     nextItems[index] = {
       ...item,
-      id: String(value.id ?? item.id).trim(),
-      label: String(value.label ?? item.label).trim(),
-      icon: String(value.icon ?? item.icon).trim(),
+      id: this._nextTextValue(value, "id", item.id),
+      label: this._nextTextValue(value, "label", item.label),
+      icon: this._nextTextValue(value, "icon", item.icon),
       action,
       floaterGroup:
         action === "set-floater-group"
-          ? String(value.floater_group ?? item.floaterGroup).trim().toLowerCase()
+          ? this._nextTextValue(value, "floater_group", item.floaterGroup).toLowerCase()
           : "",
     };
 
@@ -1565,10 +1571,10 @@ class Lovelace3DEditor extends LitElement {
     const nextActions = [...this._actions];
     nextActions[index] = {
       ...action,
-      id: String(value.id ?? action.id).trim(),
-      label: String(value.label ?? action.label).trim(),
-      service: String(value.service ?? action.service).trim(),
-      closeOnRun: value.close_on_run !== false,
+      id: this._nextTextValue(value, "id", action.id),
+      label: this._nextTextValue(value, "label", action.label),
+      service: this._nextTextValue(value, "service", action.service),
+      closeOnRun: this._hasValueKey(value, "close_on_run") ? value.close_on_run !== false : action.closeOnRun,
     };
 
     this._actions = nextActions;
@@ -2252,8 +2258,19 @@ class Lovelace3DEditor extends LitElement {
   }
 
   private _toFinite(value: unknown, fallback: number): number {
+    if (value === null || value === undefined) return fallback;
+    if (typeof value === "string" && value.trim() === "") return fallback;
     const next = Number(value);
     return Number.isFinite(next) ? next : fallback;
+  }
+
+  private _hasValueKey(record: EditorRecord, key: string): boolean {
+    return Object.prototype.hasOwnProperty.call(record, key);
+  }
+
+  private _nextTextValue(record: EditorRecord, key: string, fallback: string): string {
+    if (!this._hasValueKey(record, key)) return fallback;
+    return String(record[key] ?? "").trim();
   }
 
   private _clamp(value: number, min: number, max: number): number {

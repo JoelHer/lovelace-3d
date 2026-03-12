@@ -2,11 +2,6 @@
   <ha-card class="ha-card-reset">
     <div class="wrap">
       <div class="content">
-        <EntityState v-if="entityId" :hass="hass" :entity-id="entityId" />
-        <div v-else class="hint">
-          Set an <code>entity</code> in the card config to display a state.
-        </div>
-
         <div class="three-shell">
           <div ref="threeMount" class="three-surface" aria-label="Three.js preview" />
 
@@ -109,7 +104,6 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import EntityState from "./components/EntityState.vue";
 import FloaterButton from "./components/FloaterButton.vue";
 import FloaterEntityPopup from "./components/FloaterEntityPopup.vue";
 import RoomActionPopup from "./components/RoomActionPopup.vue";
@@ -150,7 +144,6 @@ const props = defineProps<{
 const hass = computed<HassLike | null>(() => props.state?.hass ?? null);
 const { ready: areasReady, loading: areasLoading, isValidArea, getAreaName } = useAreaRegistry(hass);
 const cfg = computed<LovelaceConfig>(() => props.state?.config ?? {});
-const entityId = computed(() => (cfg.value.entity as string | undefined) ?? "");
 
 const threeMount = ref<HTMLElement | null>(null);
 const three = useThreeFloorplan();
