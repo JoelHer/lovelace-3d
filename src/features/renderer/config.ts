@@ -5,6 +5,10 @@ export type RendererConfig = {
   gridEnabled: boolean;
   gridColor: string | null;
   backgroundColor: string | null;
+  lightSimulationEnabled: boolean;
+  lightSimulationIntensity: number;
+  lightSimulationRange: number;
+  lightSimulationDecay: number;
   cardTransparent: boolean;
   cardBackgroundColor: string | null;
 };
@@ -12,6 +16,10 @@ export type RendererConfig = {
 const DEFAULT_WALL_OPACITY = 1;
 const DEFAULT_WALL_HEIGHT = 2.6;
 const DEFAULT_GRID_ENABLED = true;
+const DEFAULT_LIGHT_SIMULATION_ENABLED = true;
+const DEFAULT_LIGHT_SIMULATION_INTENSITY = 2.4;
+const DEFAULT_LIGHT_SIMULATION_RANGE = 4.5;
+const DEFAULT_LIGHT_SIMULATION_DECAY = 1.2;
 const DEFAULT_CARD_TRANSPARENT = false;
 
 function asFinite(value: unknown): number | null {
@@ -39,6 +47,29 @@ export function parseRendererConfig(rawRenderer: unknown): RendererConfig {
   );
   const parsedWallHeight = asFinite(source.wall_height ?? source.wallHeight ?? source.walls_height ?? source.wallsHeight);
   const rawGridEnabled = source.grid_enabled ?? source.gridEnabled ?? source.grid ?? source.show_grid;
+  const rawLightSimulationEnabled =
+    source.light_simulation_enabled ??
+    source.lightSimulationEnabled ??
+    source.simulate_lights ??
+    source.simulateLights;
+  const parsedLightSimulationIntensity = asFinite(
+    source.light_simulation_intensity ??
+      source.lightSimulationIntensity ??
+      source.light_intensity ??
+      source.lightIntensity
+  );
+  const parsedLightSimulationRange = asFinite(
+    source.light_simulation_range ??
+      source.lightSimulationRange ??
+      source.light_range ??
+      source.lightRange
+  );
+  const parsedLightSimulationDecay = asFinite(
+    source.light_simulation_decay ??
+      source.lightSimulationDecay ??
+      source.light_decay ??
+      source.lightDecay
+  );
 
   return {
     wallColor: asTrimmedColor(source.wall_color ?? source.wallColor ?? source.walls_color ?? source.wallsColor),
@@ -53,6 +84,17 @@ export function parseRendererConfig(rawRenderer: unknown): RendererConfig {
         source.scene_background_color ??
         source.sceneBackgroundColor
     ),
+    lightSimulationEnabled:
+      rawLightSimulationEnabled === undefined
+        ? DEFAULT_LIGHT_SIMULATION_ENABLED
+        : rawLightSimulationEnabled !== false && rawLightSimulationEnabled !== "false",
+    lightSimulationIntensity: clamp(
+      parsedLightSimulationIntensity ?? DEFAULT_LIGHT_SIMULATION_INTENSITY,
+      0,
+      8
+    ),
+    lightSimulationRange: clamp(parsedLightSimulationRange ?? DEFAULT_LIGHT_SIMULATION_RANGE, 0.5, 20),
+    lightSimulationDecay: clamp(parsedLightSimulationDecay ?? DEFAULT_LIGHT_SIMULATION_DECAY, 0, 4),
     cardTransparent:
       (source.card_transparent ?? source.cardTransparent ?? source.transparent_card ?? source.transparentCard) === true ||
       (source.card_transparent ?? source.cardTransparent ?? source.transparent_card ?? source.transparentCard) ===
@@ -72,6 +114,10 @@ export function createRendererSignature(config: RendererConfig): string {
     `gridEnabled:${config.gridEnabled}`,
     `gridColor:${config.gridColor ?? "default"}`,
     `background:${config.backgroundColor ?? "transparent"}`,
+    `lightSimulationEnabled:${config.lightSimulationEnabled}`,
+    `lightSimulationIntensity:${config.lightSimulationIntensity.toFixed(4)}`,
+    `lightSimulationRange:${config.lightSimulationRange.toFixed(4)}`,
+    `lightSimulationDecay:${config.lightSimulationDecay.toFixed(4)}`,
     `cardTransparent:${config.cardTransparent}`,
     `cardBackground:${config.cardBackgroundColor ?? "default"}`,
   ].join("|");

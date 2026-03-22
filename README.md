@@ -10,7 +10,7 @@ A Home Assistant custom Lovelace card that renders a 3D floorplan with room popu
 - Floating entity controls (`toggle`, `more-info`, `popup`)
 - Overlap grouping for dense floater layouts
 - Sensor heatmap overlay with configurable ranges/colors
-- Camera and renderer tuning (wall height, opacity, grid, background)
+- Camera and renderer tuning (wall height, opacity, grid, background, light simulation)
 - Optional floating navbar (heatmap toggle, floater group filters)
 - Built-in visual editor (`show visual editor` in Lovelace)
 
@@ -175,6 +175,10 @@ renderer:
   wall_opacity: 0.9
   wall_height: 2.6
   grid_enabled: true
+  light_simulation_enabled: true
+  light_simulation_intensity: 2.4
+  light_simulation_range: 4.5
+  light_simulation_decay: 1.2
   card_transparent: false
   wall_color: "#ffffff"
   grid_color: "#888888"
@@ -264,7 +268,7 @@ These tokens are supported in `room_popup_actions` values:
 - `floaters`: 3D entity buttons
 - `floater_overlap`: overlap grouping behavior
 - `camera`: camera position/rotation/zoom limits
-- `renderer`: wall/grid/background/card styling
+- `renderer`: wall/grid/background/card styling and simulated light controls
 - `heatmaps`: sensor overlays and color mapping
 - `navbar`: floating control bar
 

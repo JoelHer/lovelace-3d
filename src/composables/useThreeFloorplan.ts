@@ -12,15 +12,16 @@ import {
   MOUSE,
   Mesh,
   MeshBasicMaterial,
+  MeshStandardMaterial,
   PerspectiveCamera,
   PlaneGeometry,
+  PointLight,
   Raycaster,
   Scene,
   TOUCH,
   Vector2,
   Vector3,
   WebGLRenderer,
-  MeshStandardMaterial,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
@@ -90,12 +91,26 @@ export type ThreeRendererConfig = {
   gridEnabled: boolean;
   gridColor: string | null;
   backgroundColor: string | null;
+  lightSimulationEnabled: boolean;
+  lightSimulationIntensity: number;
+  lightSimulationRange: number;
+  lightSimulationDecay: number;
+};
+
+export type SimulatedSceneLight = {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  color: string | null;
+  intensity: number;
 };
 
 type MountOptions = {
   onRoomClick?: (event: RoomClickEvent) => void;
   camera?: ThreeCameraConfig;
   renderer?: ThreeRendererConfig;
+  lights?: SimulatedSceneLight[];
 };
 
 type UseThreeFloorplan = {
@@ -103,6 +118,7 @@ type UseThreeFloorplan = {
   updateRooms(rooms: Room[]): void;
   updateCamera(camera: ThreeCameraConfig): void;
   updateRenderer(renderer: ThreeRendererConfig): void;
+  updateLights(lights: SimulatedSceneLight[]): void;
   updateHeatmap(data: HeatmapRenderData | null): void;
   projectWorldPoint(worldX: number, worldY: number, worldZ: number): ProjectedPoint | null;
   subscribeFrame(listener: () => void): () => void;
@@ -139,6 +155,8 @@ type FloorplanState = {
   wallGroup: Group | null;
   wallMaterial: MeshStandardMaterial | null;
   gridHelper: GridHelper | null;
+  simulatedLightGroup: Group | null;
+  simulatedLights: SimulatedSceneLight[];
   rendererConfig: ThreeRendererConfig;
   heatmapBounds: HeatmapBounds | null;
   heatmapMesh: Mesh | null;
@@ -206,6 +224,11 @@ const DEFAULT_WALL_HEIGHT = 2.6;
 const DEFAULT_GRID_ENABLED = true;
 const DEFAULT_GRID_PRIMARY_COLOR_HEX = 0x888888;
 const DEFAULT_GRID_SECONDARY_COLOR_HEX = 0x444444;
+const DEFAULT_LIGHT_SIMULATION_ENABLED = true;
+const DEFAULT_LIGHT_SIMULATION_INTENSITY = 2.4;
+const DEFAULT_LIGHT_SIMULATION_RANGE = 4.5;
+const DEFAULT_LIGHT_SIMULATION_DECAY = 1.2;
+const DEFAULT_LIGHT_SIMULATION_COLOR_HEX = 0xffd666;
 
 type DistanceNode = {
   index: number;
@@ -219,6 +242,9 @@ function clamp(value: number, min: number, max: number): number {
 function normalizeRendererConfig(config?: ThreeRendererConfig): ThreeRendererConfig {
   const parsedWallOpacity = Number(config?.wallOpacity);
   const parsedWallHeight = Number(config?.wallHeight);
+  const parsedLightSimulationIntensity = Number(config?.lightSimulationIntensity);
+  const parsedLightSimulationRange = Number(config?.lightSimulationRange);
+  const parsedLightSimulationDecay = Number(config?.lightSimulationDecay);
 
   return {
     wallColor: typeof config?.wallColor === "string" && config.wallColor.trim() ? config.wallColor.trim() : null,
@@ -228,7 +254,57 @@ function normalizeRendererConfig(config?: ThreeRendererConfig): ThreeRendererCon
     gridColor: typeof config?.gridColor === "string" && config.gridColor.trim() ? config.gridColor.trim() : null,
     backgroundColor:
       typeof config?.backgroundColor === "string" && config.backgroundColor.trim() ? config.backgroundColor.trim() : null,
+    lightSimulationEnabled:
+      config?.lightSimulationEnabled === undefined
+        ? DEFAULT_LIGHT_SIMULATION_ENABLED
+        : config.lightSimulationEnabled !== false,
+    lightSimulationIntensity: clamp(
+      Number.isFinite(parsedLightSimulationIntensity)
+        ? parsedLightSimulationIntensity
+        : DEFAULT_LIGHT_SIMULATION_INTENSITY,
+      0,
+      8
+    ),
+    lightSimulationRange: clamp(
+      Number.isFinite(parsedLightSimulationRange) ? parsedLightSimulationRange : DEFAULT_LIGHT_SIMULATION_RANGE,
+      0.5,
+      20
+    ),
+    lightSimulationDecay: clamp(
+      Number.isFinite(parsedLightSimulationDecay) ? parsedLightSimulationDecay : DEFAULT_LIGHT_SIMULATION_DECAY,
+      0,
+      4
+    ),
   };
+}
+
+function normalizeSimulatedLights(lights?: ReadonlyArray<SimulatedSceneLight>): SimulatedSceneLight[] {
+  if (!Array.isArray(lights)) return [];
+
+  const normalized: SimulatedSceneLight[] = [];
+  for (const light of lights) {
+    const x = Number(light?.x);
+    const y = Number(light?.y);
+    const z = Number(light?.z);
+    const intensity = Number(light?.intensity);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z) || !Number.isFinite(intensity)) {
+      continue;
+    }
+
+    const clampedIntensity = clamp(intensity, 0, 1);
+    if (clampedIntensity <= 0.0001) continue;
+
+    normalized.push({
+      id: String(light?.id ?? `light-${normalized.length + 1}`),
+      x,
+      y,
+      z,
+      color: typeof light?.color === "string" && light.color.trim() ? light.color.trim() : null,
+      intensity: clampedIntensity,
+    });
+  }
+
+  return normalized;
 }
 
 function computeHeatmapBounds(rooms: ReadonlyArray<Room>): HeatmapBounds | null {
@@ -787,6 +863,47 @@ function replaceGridHelper(state: FloorplanState): void {
   state.scene.add(nextGrid);
 }
 
+function replaceSimulatedLightGroup(state: FloorplanState): void {
+  if (state.scene && state.simulatedLightGroup) {
+    state.scene.remove(state.simulatedLightGroup);
+  }
+  state.simulatedLightGroup = null;
+
+  if (
+    !state.scene ||
+    !state.rendererConfig.lightSimulationEnabled ||
+    state.rendererConfig.lightSimulationIntensity <= 0 ||
+    state.rendererConfig.lightSimulationRange <= 0 ||
+    state.simulatedLights.length === 0
+  ) {
+    return;
+  }
+
+  const group = new Group();
+  const intensityMultiplier = state.rendererConfig.lightSimulationIntensity;
+  const distance = state.rendererConfig.lightSimulationRange;
+  const decay = state.rendererConfig.lightSimulationDecay;
+
+  for (const light of state.simulatedLights) {
+    const pointLight = new PointLight(
+      resolveColor(light.color, DEFAULT_LIGHT_SIMULATION_COLOR_HEX),
+      light.intensity * intensityMultiplier,
+      distance,
+      decay
+    );
+    pointLight.position.set(light.x, light.y, light.z);
+    group.add(pointLight);
+  }
+
+  state.simulatedLightGroup = group;
+  state.scene.add(group);
+}
+
+function applySimulatedLights(state: FloorplanState, lights: ReadonlyArray<SimulatedSceneLight>): void {
+  state.simulatedLights = normalizeSimulatedLights(lights);
+  replaceSimulatedLightGroup(state);
+}
+
 function applySceneBackground(scene: Scene | null, backgroundColor: string | null): void {
   if (!scene) return;
   if (!backgroundColor) {
@@ -816,6 +933,7 @@ function applyRendererConfig(state: FloorplanState, config: ThreeRendererConfig)
   }
 
   applyWallMaterialConfig(state.wallMaterial, normalized);
+  replaceSimulatedLightGroup(state);
 
   if (wallHeightChanged && state.heatmapRooms.length > 0) {
     replaceWallGroup(state, state.heatmapRooms);
@@ -1444,6 +1562,12 @@ function cleanupState(state: FloorplanState): void {
   disposeGridHelper(state.gridHelper);
   state.gridHelper = null;
 
+  if (state.scene && state.simulatedLightGroup) {
+    state.scene.remove(state.simulatedLightGroup);
+  }
+  state.simulatedLightGroup = null;
+  state.simulatedLights = [];
+
   if (state.floorGroup) {
     disposeMeshGeometries(state.floorGroup);
     state.floorGroup = null;
@@ -1527,6 +1651,8 @@ export function useThreeFloorplan(): UseThreeFloorplan {
     wallGroup: null,
     wallMaterial: null,
     gridHelper: null,
+    simulatedLightGroup: null,
+    simulatedLights: [],
     rendererConfig: normalizeRendererConfig(),
     heatmapBounds: null,
     heatmapMesh: null,
@@ -1551,6 +1677,7 @@ export function useThreeFloorplan(): UseThreeFloorplan {
     }
 
     state.rendererConfig = normalizeRendererConfig(options?.renderer);
+    state.simulatedLights = normalizeSimulatedLights(options?.lights);
     state.scene = new Scene();
     state.camera = createCamera(options?.camera);
     state.renderer = createRenderer(container);
@@ -1558,6 +1685,7 @@ export function useThreeFloorplan(): UseThreeFloorplan {
 
     addSceneDecorations(state);
     replaceRooms(state, rooms);
+    replaceSimulatedLightGroup(state);
 
     resizeRenderer(state.renderer, state.camera, container);
     state.resizeObserver = new ResizeObserver(() => {
@@ -1585,6 +1713,10 @@ export function useThreeFloorplan(): UseThreeFloorplan {
     applyRendererConfig(state, rendererConfig);
   };
 
+  const updateLights = (lights: SimulatedSceneLight[]): void => {
+    applySimulatedLights(state, lights);
+  };
+
   const updateHeatmap = (data: HeatmapRenderData | null): void => {
     state.heatmapData = data;
     renderHeatmap(state);
@@ -1601,6 +1733,7 @@ export function useThreeFloorplan(): UseThreeFloorplan {
     updateRooms,
     updateCamera,
     updateRenderer,
+    updateLights,
     updateHeatmap,
     projectWorldPoint: (worldX, worldY, worldZ) => projectWorldPoint(state, worldX, worldY, worldZ),
     subscribeFrame: (listener) => {

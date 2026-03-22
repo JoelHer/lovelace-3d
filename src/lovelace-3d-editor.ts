@@ -33,6 +33,10 @@ const DEFAULT_CAMERA_MAX_ZOOM_OUT = 60;
 const DEFAULT_RENDERER_WALL_OPACITY = 1;
 const DEFAULT_RENDERER_WALL_HEIGHT = 2.6;
 const DEFAULT_RENDERER_GRID_ENABLED = true;
+const DEFAULT_RENDERER_LIGHT_SIMULATION_ENABLED = true;
+const DEFAULT_RENDERER_LIGHT_SIMULATION_INTENSITY = 2.4;
+const DEFAULT_RENDERER_LIGHT_SIMULATION_RANGE = 4.5;
+const DEFAULT_RENDERER_LIGHT_SIMULATION_DECAY = 1.2;
 const DEFAULT_RENDERER_CARD_TRANSPARENT = false;
 const DEFAULT_FLOATER_OVERLAP_DISTANCE = 40;
 const DEFAULT_FLOATER_OVERLAP_MIN_ITEMS = 2;
@@ -134,6 +138,10 @@ type RendererEditorConfig = {
   gridEnabled: boolean;
   gridColor: string;
   backgroundColor: string;
+  lightSimulationEnabled: boolean;
+  lightSimulationIntensity: number;
+  lightSimulationRange: number;
+  lightSimulationDecay: number;
   cardTransparent: boolean;
   cardBackgroundColor: string;
   extra: EditorRecord;
@@ -494,6 +502,50 @@ class Lovelace3DEditor extends LitElement {
                       { name: "background_color", selector: { text: {} } },
                       { name: "card_transparent", selector: { boolean: {} } },
                       { name: "card_background_color", selector: { text: {} } },
+                    ]}
+                    .computeLabel=${this._computeLabel}
+                    @value-changed=${this._rendererChanged}
+                  ></ha-form>
+                </div>
+              </ha-expansion-panel>
+            </section>
+            <section class="item-panel">
+              <ha-expansion-panel
+                outlined
+                ?expanded=${this._isPanelExpanded("renderer-light-simulation", true)}
+                @expanded-changed=${(ev: Event) => {
+                  this._panelExpandedChanged("renderer-light-simulation", ev);
+                }}
+              >
+                <h5 slot="header" class="item-header">
+                  <span class="section-title-label">
+                    <ha-icon .icon=${"mdi:lightbulb-group-outline"}></ha-icon>
+                    Light Simulation
+                  </span>
+                </h5>
+                <div class="item-content">
+                  <ha-form
+                    .hass=${this.hass}
+                    .data=${{
+                      light_simulation_enabled: this._renderer.lightSimulationEnabled,
+                      light_simulation_intensity: this._renderer.lightSimulationIntensity,
+                      light_simulation_range: this._renderer.lightSimulationRange,
+                      light_simulation_decay: this._renderer.lightSimulationDecay,
+                    }}
+                    .schema=${[
+                      { name: "light_simulation_enabled", selector: { boolean: {} } },
+                      {
+                        name: "light_simulation_intensity",
+                        selector: { number: { min: 0, max: 8, step: 0.1 } },
+                      },
+                      {
+                        name: "light_simulation_range",
+                        selector: { number: { min: 0.5, max: 20, step: 0.1 } },
+                      },
+                      {
+                        name: "light_simulation_decay",
+                        selector: { number: { min: 0, max: 4, step: 0.1 } },
+                      },
                     ]}
                     .computeLabel=${this._computeLabel}
                     @value-changed=${this._rendererChanged}
@@ -1341,6 +1393,14 @@ class Lovelace3DEditor extends LitElement {
         return "Transparent";
       case "background_color":
         return "Background Color";
+      case "light_simulation_enabled":
+        return "Enable Light Simulation";
+      case "light_simulation_intensity":
+        return "Light Intensity";
+      case "light_simulation_range":
+        return "Light Range";
+      case "light_simulation_decay":
+        return "Light Decay";
       case "border_color":
         return "Border Color";
       case "text_color":
@@ -1410,6 +1470,24 @@ class Lovelace3DEditor extends LitElement {
       gridEnabled: this._hasValueKey(value, "grid_enabled") ? value.grid_enabled !== false : this._renderer.gridEnabled,
       gridColor: this._nextTextValue(value, "grid_color", this._renderer.gridColor),
       backgroundColor: this._nextTextValue(value, "background_color", this._renderer.backgroundColor),
+      lightSimulationEnabled: this._hasValueKey(value, "light_simulation_enabled")
+        ? value.light_simulation_enabled !== false
+        : this._renderer.lightSimulationEnabled,
+      lightSimulationIntensity: this._clamp(
+        this._toFinite(value.light_simulation_intensity, this._renderer.lightSimulationIntensity),
+        0,
+        8
+      ),
+      lightSimulationRange: this._clamp(
+        this._toFinite(value.light_simulation_range, this._renderer.lightSimulationRange),
+        0.5,
+        20
+      ),
+      lightSimulationDecay: this._clamp(
+        this._toFinite(value.light_simulation_decay, this._renderer.lightSimulationDecay),
+        0,
+        4
+      ),
       cardTransparent: this._hasValueKey(value, "card_transparent")
         ? value.card_transparent !== false
         : this._renderer.cardTransparent,
@@ -1930,6 +2008,10 @@ class Lovelace3DEditor extends LitElement {
       wall_opacity: this._renderer.wallOpacity,
       wall_height: this._renderer.wallHeight,
       grid_enabled: this._renderer.gridEnabled,
+      light_simulation_enabled: this._renderer.lightSimulationEnabled,
+      light_simulation_intensity: this._renderer.lightSimulationIntensity,
+      light_simulation_range: this._renderer.lightSimulationRange,
+      light_simulation_decay: this._renderer.lightSimulationDecay,
       card_transparent: this._renderer.cardTransparent,
     };
 
@@ -2387,6 +2469,44 @@ class Lovelace3DEditor extends LitElement {
           source?.sceneBackgroundColor ??
           ""
       ).trim(),
+      lightSimulationEnabled:
+        (source?.light_simulation_enabled ??
+          source?.lightSimulationEnabled ??
+          source?.simulate_lights ??
+          source?.simulateLights) !== false,
+      lightSimulationIntensity: this._clamp(
+        this._toFinite(
+          source?.light_simulation_intensity ??
+            source?.lightSimulationIntensity ??
+            source?.light_intensity ??
+            source?.lightIntensity,
+          DEFAULT_RENDERER_LIGHT_SIMULATION_INTENSITY
+        ),
+        0,
+        8
+      ),
+      lightSimulationRange: this._clamp(
+        this._toFinite(
+          source?.light_simulation_range ??
+            source?.lightSimulationRange ??
+            source?.light_range ??
+            source?.lightRange,
+          DEFAULT_RENDERER_LIGHT_SIMULATION_RANGE
+        ),
+        0.5,
+        20
+      ),
+      lightSimulationDecay: this._clamp(
+        this._toFinite(
+          source?.light_simulation_decay ??
+            source?.lightSimulationDecay ??
+            source?.light_decay ??
+            source?.lightDecay,
+          DEFAULT_RENDERER_LIGHT_SIMULATION_DECAY
+        ),
+        0,
+        4
+      ),
       cardTransparent:
         (source?.card_transparent ??
           source?.cardTransparent ??
@@ -2423,6 +2543,22 @@ class Lovelace3DEditor extends LitElement {
         "background",
         "scene_background_color",
         "sceneBackgroundColor",
+        "light_simulation_enabled",
+        "lightSimulationEnabled",
+        "simulate_lights",
+        "simulateLights",
+        "light_simulation_intensity",
+        "lightSimulationIntensity",
+        "light_intensity",
+        "lightIntensity",
+        "light_simulation_range",
+        "lightSimulationRange",
+        "light_range",
+        "lightRange",
+        "light_simulation_decay",
+        "lightSimulationDecay",
+        "light_decay",
+        "lightDecay",
         "card_transparent",
         "cardTransparent",
         "transparent_card",
@@ -2761,6 +2897,10 @@ class Lovelace3DEditor extends LitElement {
       gridEnabled: DEFAULT_RENDERER_GRID_ENABLED,
       gridColor: "",
       backgroundColor: "",
+      lightSimulationEnabled: DEFAULT_RENDERER_LIGHT_SIMULATION_ENABLED,
+      lightSimulationIntensity: DEFAULT_RENDERER_LIGHT_SIMULATION_INTENSITY,
+      lightSimulationRange: DEFAULT_RENDERER_LIGHT_SIMULATION_RANGE,
+      lightSimulationDecay: DEFAULT_RENDERER_LIGHT_SIMULATION_DECAY,
       cardTransparent: DEFAULT_RENDERER_CARD_TRANSPARENT,
       cardBackgroundColor: "",
       extra: {},

@@ -111,6 +111,7 @@ import {
   useThreeFloorplan,
   type HeatmapRenderData,
   type RoomClickEvent,
+  type SimulatedSceneLight,
 } from "./composables/useThreeFloorplan";
 import { useAreaRegistry } from "./composables/useAreaRegistry";
 import { createHeatmapSignature, parseHeatmapConfig, type HeatmapConfig } from "./features/heatmaps";
@@ -239,6 +240,32 @@ const cardStyle = computed<Record<string, string>>(() => {
   return style;
 });
 
+const simulatedFloaterLights = computed<SimulatedSceneLight[]>(() => {
+  if (!rendererConfig.value.lightSimulationEnabled) return [];
+
+  const lights: SimulatedSceneLight[] = [];
+  for (const floater of floaters.value) {
+    if (!floater.entityId.startsWith("light.")) continue;
+
+    const entityState = hass.value?.states?.[floater.entityId] as HassEntityState | undefined;
+    if (!entityState || entityState.state !== "on") continue;
+
+    const intensity = resolveLightBrightness(entityState.attributes);
+    if (intensity <= 0.0001) continue;
+
+    lights.push({
+      id: floater.id,
+      x: floater.point.x,
+      y: floater.point.y,
+      z: floater.point.z,
+      color: resolveLightColor(entityState.attributes),
+      intensity,
+    });
+  }
+
+  return lights;
+});
+
 const FLOATER_GROUP_ICON = "mdi:layers-triple";
 const FLOATER_GROUP_COLLAPSE_ICON = "mdi:close";
 const FLOATER_GROUP_RADIUS_BASE_PX = 52;
@@ -304,6 +331,8 @@ function asNumber(value: unknown): number | null {
   return Number.isFinite(next) ? next : null;
 }
 
+const DEFAULT_LIGHT_RGB: [number, number, number] = [255, 214, 102];
+
 function hsvToRgb(h: number, s: number, v: number): [number, number, number] {
   const saturation = Math.max(0, Math.min(1, s / 100));
   const value = Math.max(0, Math.min(1, v / 255));
@@ -329,17 +358,80 @@ function hsvToRgb(h: number, s: number, v: number): [number, number, number] {
   ];
 }
 
-function resolveLightColor(attributes: Record<string, unknown> | undefined): string {
-  if (!attributes) return "rgb(255, 214, 102)";
+function clampRgbChannel(value: number): number {
+  return Math.round(Math.min(255, Math.max(0, value)));
+}
 
-  const rgb = attributes.rgb_color;
-  if (Array.isArray(rgb) && rgb.length >= 3) {
-    const r = asNumber(rgb[0]);
-    const g = asNumber(rgb[1]);
-    const b = asNumber(rgb[2]);
-    if (r !== null && g !== null && b !== null) {
-      return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
+function rgbToCss(rgb: readonly [number, number, number]): string {
+  return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+}
+
+function resolveRgbArray(rawValue: unknown): [number, number, number] | null {
+  if (!Array.isArray(rawValue) || rawValue.length < 3) return null;
+
+  const r = asNumber(rawValue[0]);
+  const g = asNumber(rawValue[1]);
+  const b = asNumber(rawValue[2]);
+  if (r === null || g === null || b === null) return null;
+
+  return [clampRgbChannel(r), clampRgbChannel(g), clampRgbChannel(b)];
+}
+
+function isNonBlackRgb(rgb: readonly [number, number, number]): boolean {
+  return rgb[0] > 0 || rgb[1] > 0 || rgb[2] > 0;
+}
+
+function kelvinToRgb(kelvin: number): [number, number, number] {
+  const temperature = Math.min(40000, Math.max(1000, kelvin)) / 100;
+
+  let r = 255;
+  let g = 255;
+  let b = 255;
+
+  if (temperature <= 66) {
+    g = 99.4708025861 * Math.log(temperature) - 161.1195681661;
+    b =
+      temperature <= 19
+        ? 0
+        : 138.5177312231 * Math.log(temperature - 10) - 305.0447927307;
+  } else {
+    r = 329.698727446 * Math.pow(temperature - 60, -0.1332047592);
+    g = 288.1221695283 * Math.pow(temperature - 60, -0.0755148492);
+  }
+
+  return [clampRgbChannel(r), clampRgbChannel(g), clampRgbChannel(b)];
+}
+
+function resolveLightRgb(attributes: Record<string, unknown> | undefined): [number, number, number] {
+  if (!attributes) return DEFAULT_LIGHT_RGB;
+
+  const rgb = resolveRgbArray(attributes.rgb_color);
+  if (rgb) return rgb;
+
+  const rgbw = attributes.rgbw_color;
+  if (Array.isArray(rgbw) && rgbw.length >= 4) {
+    const nextRgb = resolveRgbArray(rgbw);
+    const white = asNumber(rgbw[3]);
+    if (nextRgb && isNonBlackRgb(nextRgb)) return nextRgb;
+    if (white !== null && white > 0) {
+      return kelvinToRgb(3200);
     }
+    if (nextRgb) return nextRgb;
+  }
+
+  const rgbww = attributes.rgbww_color;
+  if (Array.isArray(rgbww) && rgbww.length >= 5) {
+    const nextRgb = resolveRgbArray(rgbww);
+    if (nextRgb && isNonBlackRgb(nextRgb)) return nextRgb;
+
+    const warmWhite = asNumber(rgbww[3]) ?? 0;
+    const coolWhite = asNumber(rgbww[4]) ?? 0;
+    const totalWhite = warmWhite + coolWhite;
+    if (totalWhite > 0) {
+      const coolRatio = coolWhite / totalWhite;
+      return kelvinToRgb(2700 + coolRatio * 3800);
+    }
+    if (nextRgb) return nextRgb;
   }
 
   const hs = attributes.hs_color;
@@ -348,12 +440,41 @@ function resolveLightColor(attributes: Record<string, unknown> | undefined): str
     const s = asNumber(hs[1]);
     const brightness = asNumber(attributes.brightness) ?? 255;
     if (h !== null && s !== null) {
-      const [r, g, b] = hsvToRgb(h, s, brightness);
-      return `rgb(${r}, ${g}, ${b})`;
+      return hsvToRgb(h, s, brightness);
     }
   }
 
-  return "rgb(255, 214, 102)";
+  const colorTempKelvin = asNumber(attributes.color_temp_kelvin);
+  if (colorTempKelvin !== null && colorTempKelvin > 0) {
+    return kelvinToRgb(colorTempKelvin);
+  }
+
+  const colorTempMired = asNumber(attributes.color_temp);
+  if (colorTempMired !== null && colorTempMired > 0) {
+    return kelvinToRgb(1000000 / colorTempMired);
+  }
+
+  return DEFAULT_LIGHT_RGB;
+}
+
+function resolveLightColor(attributes: Record<string, unknown> | undefined): string {
+  return rgbToCss(resolveLightRgb(attributes));
+}
+
+function resolveLightBrightness(attributes: Record<string, unknown> | undefined): number {
+  if (!attributes) return 1;
+
+  const brightness = asNumber(attributes.brightness);
+  if (brightness !== null) {
+    return clamp01(brightness / 255);
+  }
+
+  const brightnessPct = asNumber(attributes.brightness_pct);
+  if (brightnessPct !== null) {
+    return clamp01(brightnessPct / 100);
+  }
+
+  return 1;
 }
 
 function resolveFloaterAccentColor(
@@ -1251,11 +1372,24 @@ function updateHeatmapOverlay() {
   three.updateHeatmap(heatmapRenderData.value);
 }
 
+function updateSimulatedLights() {
+  if (!three.isMounted()) return;
+  three.updateLights(simulatedFloaterLights.value);
+}
+
 const roomsSignature = computed(() => createRoomsSignature(rooms.value));
 const floatersSignature = computed(() => createFloatersSignature(floaters.value));
 const heatmapSignature = computed(() => createHeatmapSignature(heatmapConfig.value));
 const cameraSignature = computed(() => createCameraSignature(cameraConfig.value));
 const rendererSignature = computed(() => createRendererSignature(rendererConfig.value));
+const simulatedFloaterLightsSignature = computed(() =>
+  simulatedFloaterLights.value
+    .map(
+      (light) =>
+        `${light.id}|${light.color ?? "default"}|${light.intensity.toFixed(4)}|${light.x.toFixed(4)},${light.y.toFixed(4)},${light.z.toFixed(4)}`
+    )
+    .join("||")
+);
 const floaterOverlapSignature = computed(() =>
   createFloaterOverlapSignature(floaterOverlapConfig.value)
 );
@@ -1275,12 +1409,14 @@ onMounted(() => {
           onRoomClick,
           camera: cameraConfig.value,
           renderer: rendererConfig.value,
+          lights: simulatedFloaterLights.value,
         });
       } else {
         three.updateRooms(nextRooms);
         three.updateCamera(cameraConfig.value);
         three.updateRenderer(rendererConfig.value);
       }
+      updateSimulatedLights();
       updateFloaterProjections();
       updateHeatmapOverlay();
     },
@@ -1318,6 +1454,10 @@ watch(floatersSignature, () => {
 
 watch(floaterOverlapSignature, () => {
   closeFloaterGroup();
+});
+
+watch(simulatedFloaterLightsSignature, () => {
+  updateSimulatedLights();
 });
 
 watch(isHeatmapFloaterMode, (enabled) => {
