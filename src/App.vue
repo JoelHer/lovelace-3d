@@ -139,6 +139,7 @@ import {
   parseRoomEntries,
   type PopupAction,
   type PopupState,
+  type RoomClickConfig,
   type RoomTapAction,
 } from "./features/rooms";
 import type { HassEntityState, HassLike } from "./types/homeAssistant";
@@ -180,10 +181,10 @@ const roomEntries = computed(() =>
 const rooms = computed(() => roomEntries.value.map((entry) => entry.room));
 
 const roomActionConfigs = computed(() => buildRoomActionConfigMap(roomEntries.value));
-const roomTapActions = computed<Record<string, RoomTapAction>>(() => {
-  const map: Record<string, RoomTapAction> = {};
+const roomClickConfigs = computed<Record<string, RoomClickConfig>>(() => {
+  const map: Record<string, RoomClickConfig> = {};
   for (const entry of roomEntries.value) {
-    map[entry.room.id] = entry.tapAction;
+    map[entry.room.id] = entry.clickConfig;
   }
   return map;
 });
@@ -1242,21 +1243,33 @@ function onRoomClick(event: RoomClickEvent) {
   closeFloaterPopup();
   closeFloaterGroup();
 
-  const tapAction = roomTapActions.value[event.roomId] ?? "popup";
+  const popup = createRoomPopupState(event);
+  const clickConfig = roomClickConfigs.value[event.roomId];
+  const tapAction: RoomTapAction = clickConfig?.tapAction ?? "popup";
+
   if (tapAction === "none") {
     closeRoomPopup();
     return;
   }
 
-  roomPopup.value = {
-    roomId: event.roomId,
-    roomName: event.roomName || event.roomId,
-    x: event.x,
-    y: event.y,
-    worldX: event.worldX,
-    worldY: event.worldY,
-    worldZ: event.worldZ,
-  };
+  if (tapAction === "navigate") {
+    closeRoomPopup();
+    const navigationPath = String(applyActionTemplates(clickConfig?.navigationPath ?? "", popup) ?? "").trim();
+    if (!navigationPath) {
+      console.warn("[lovelace-3d] Room navigate action is missing navigation_path", event);
+      return;
+    }
+
+    dispatchHomeAssistantAction({
+      tap_action: {
+        action: "navigate",
+        navigation_path: navigationPath,
+      },
+    });
+    return;
+  }
+
+  roomPopup.value = popup;
 }
 
 async function runRoomPopupAction(actionId: string) {
@@ -1294,6 +1307,32 @@ function openEntityControlDialog(entityId: string) {
   dispatchTarget.dispatchEvent(
     new CustomEvent("hass-more-info", {
       detail: { entityId },
+      bubbles: true,
+      composed: true,
+    })
+  );
+}
+
+function createRoomPopupState(event: RoomClickEvent): PopupState {
+  return {
+    roomId: event.roomId,
+    roomName: event.roomName || event.roomId,
+    x: event.x,
+    y: event.y,
+    worldX: event.worldX,
+    worldY: event.worldY,
+    worldZ: event.worldZ,
+  };
+}
+
+function dispatchHomeAssistantAction(config: Record<string, unknown>) {
+  const dispatchTarget = threeMount.value ?? document.body;
+  dispatchTarget.dispatchEvent(
+    new CustomEvent("hass-action", {
+      detail: {
+        config,
+        action: "tap",
+      },
       bubbles: true,
       composed: true,
     })

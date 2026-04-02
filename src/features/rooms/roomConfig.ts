@@ -19,7 +19,12 @@ export type PopupAction = {
   closeOnRun: boolean;
 };
 
-export type RoomTapAction = "popup" | "none";
+export type RoomTapAction = "popup" | "navigate" | "none";
+
+export type RoomClickConfig = {
+  tapAction: RoomTapAction;
+  navigationPath: string;
+};
 
 export type RoomActionConfig = {
   configured: boolean;
@@ -28,7 +33,7 @@ export type RoomActionConfig = {
 
 export type RoomEntry = {
   room: Room;
-  tapAction: RoomTapAction;
+  clickConfig: RoomClickConfig;
   actionConfig: RoomActionConfig;
 };
 
@@ -62,8 +67,34 @@ function parsePolygon(rawPolygon: unknown): Vec2XZ[] {
 function parseRoomTapAction(rawValue: unknown, fallback: RoomTapAction): RoomTapAction {
   const normalized = String(rawValue ?? "").trim().toLowerCase().replace(/_/g, "-");
   if (normalized === "popup") return "popup";
+  if (normalized === "navigate") return "navigate";
   if (normalized === "none" || normalized === "disabled" || normalized === "ignore") return "none";
   return fallback;
+}
+
+function parseRoomClickConfig(rawRoom: Record<string, unknown>): RoomClickConfig {
+  const tapActionConfig = toRecord(rawRoom.tap_action);
+  const tapAction = parseRoomTapAction(
+    tapActionConfig?.action ??
+      rawRoom.tap_action ??
+      rawRoom.press_action ??
+      rawRoom.action ??
+      rawRoom.click_action ??
+      rawRoom.on_click,
+    "popup"
+  );
+
+  return {
+    tapAction,
+    navigationPath: String(
+      tapActionConfig?.navigation_path ??
+        tapActionConfig?.path ??
+        rawRoom.navigation_path ??
+        rawRoom.url_path ??
+        rawRoom.path ??
+        ""
+    ).trim(),
+  };
 }
 
 export function parsePopupActions(rawActions: unknown, contextLabel: string): RoomActionConfig {
@@ -122,15 +153,11 @@ export function parseRoomEntries(rawRooms: unknown, areas: AreaLookup): RoomEntr
     if (polygon.length < 3) continue;
 
     const name = String(roomObj.name ?? "") || areas.getAreaName(areaId) || areaId;
-    const tapAction = parseRoomTapAction(
-      roomObj.tap_action ?? roomObj.press_action ?? roomObj.action ?? roomObj.click_action ?? roomObj.on_click,
-      "popup"
-    );
     const rawRoomActions = roomObj.room_popup_actions ?? roomObj.room_actions;
 
     parsed.push({
       room: { id: areaId, name, polygon },
-      tapAction,
+      clickConfig: parseRoomClickConfig(roomObj),
       actionConfig: parsePopupActions(rawRoomActions, `Room "${areaId}"`),
     });
   }

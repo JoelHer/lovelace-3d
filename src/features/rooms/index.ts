@@ -9,6 +9,7 @@ export type {
   AreaLookup,
   PopupAction,
   PopupState,
+  RoomClickConfig,
   RoomActionConfig,
   RoomEntry,
   RoomTapAction,

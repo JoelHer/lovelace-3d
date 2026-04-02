@@ -63,12 +63,13 @@ type CameraRotationEditor = {
   y: number;
 };
 
-type RoomTapAction = "popup" | "none";
+type RoomTapAction = "popup" | "navigate" | "none";
 
 type RoomEditorEntry = {
   area: string;
   name: string;
   tapAction: RoomTapAction;
+  navigationPath: string;
   polygon: Point2Editor[];
   extra: EditorRecord;
 };
@@ -606,7 +607,12 @@ class Lovelace3DEditor extends LitElement {
                       <div class="item-content">
                         <ha-form
                           .hass=${this.hass}
-                          .data=${{ area: room.area, name: room.name, tap_action: room.tapAction }}
+                          .data=${{
+                            area: room.area,
+                            name: room.name,
+                            tap_action: room.tapAction,
+                            navigation_path: room.navigationPath,
+                          }}
                           .schema=${[
                             { name: "area", selector: { text: {} } },
                             { name: "name", selector: { text: {} } },
@@ -617,11 +623,15 @@ class Lovelace3DEditor extends LitElement {
                                   mode: "dropdown",
                                   options: [
                                     { label: "Popup", value: "popup" },
+                                    { label: "Navigate", value: "navigate" },
                                     { label: "None", value: "none" },
                                   ],
                                 },
                               },
                             },
+                            ...(room.tapAction === "navigate"
+                              ? [{ name: "navigation_path", selector: { text: {} } }]
+                              : []),
                           ]}
                           .computeLabel=${this._computeLabel}
                           @value-changed=${(ev: CustomEvent) => {
@@ -1350,6 +1360,8 @@ class Lovelace3DEditor extends LitElement {
         return "Floater Group";
       case "tap_action":
         return "Tap Action";
+      case "navigation_path":
+        return "Navigation Path";
       case "hold_action":
         return "Hold Action";
       case "value_attribute":
@@ -1553,6 +1565,7 @@ class Lovelace3DEditor extends LitElement {
         area: "",
         name: "",
         tapAction: "popup",
+        navigationPath: "",
         polygon: this._createDefaultRoomPolygon(),
         extra: {},
       },
@@ -1576,6 +1589,7 @@ class Lovelace3DEditor extends LitElement {
       area: this._nextTextValue(value, "area", room.area),
       name: this._nextTextValue(value, "name", room.name),
       tapAction: this._normalizeRoomTapAction(value.tap_action, room.tapAction),
+      navigationPath: this._nextTextValue(value, "navigation_path", room.navigationPath),
     };
 
     this._rooms = nextRooms;
@@ -2065,6 +2079,10 @@ class Lovelace3DEditor extends LitElement {
       if (name) next.name = name;
       else delete next.name;
 
+      const navigationPath = room.navigationPath.trim();
+      if (room.tapAction === "navigate" && navigationPath) next.navigation_path = navigationPath;
+      else delete next.navigation_path;
+
       return next;
     });
   }
@@ -2270,15 +2288,29 @@ class Lovelace3DEditor extends LitElement {
         const room = this._asRecord(rawRoom);
         if (!room) return null;
 
+        const tapActionConfig = this._asRecord(room.tap_action);
         const polygon = this._parsePolygon(room.polygon);
 
         return {
           area: String(room.area ?? "").trim(),
           name: String(room.name ?? "").trim(),
           tapAction: this._normalizeRoomTapAction(
-            room.tap_action ?? room.press_action ?? room.action ?? room.click_action ?? room.on_click,
+            tapActionConfig?.action ??
+              room.tap_action ??
+              room.press_action ??
+              room.action ??
+              room.click_action ??
+              room.on_click,
             "popup"
           ),
+          navigationPath: String(
+            tapActionConfig?.navigation_path ??
+              tapActionConfig?.path ??
+              room.navigation_path ??
+              room.url_path ??
+              room.path ??
+              ""
+          ).trim(),
           polygon: polygon.length > 0 ? polygon : this._createDefaultRoomPolygon(),
           extra: this._withoutKeys(room, [
             "area",
@@ -2288,6 +2320,9 @@ class Lovelace3DEditor extends LitElement {
             "action",
             "click_action",
             "on_click",
+            "navigation_path",
+            "url_path",
+            "path",
             "polygon",
           ]),
         };
@@ -3103,6 +3138,7 @@ class Lovelace3DEditor extends LitElement {
   private _normalizeRoomTapAction(value: unknown, fallback: RoomTapAction): RoomTapAction {
     const normalized = String(value ?? "").trim().toLowerCase().replace(/_/g, "-");
     if (normalized === "popup") return "popup";
+    if (normalized === "navigate") return "navigate";
     if (normalized === "none" || normalized === "disabled" || normalized === "ignore") return "none";
     return fallback;
   }

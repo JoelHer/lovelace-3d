@@ -108,6 +108,8 @@ rooms:
         - 4.5
   - area: kitchen
     name: Kitchen
+    tap_action: navigate
+    navigation_path: /lovelace/kitchen
     polygon:
       - - 3.8
         - 2
@@ -261,9 +263,19 @@ These tokens are supported in `room_popup_actions` values:
 - `{{ click.x }}`, `{{ click.y }}`
 - `{{ click.world_x }}`, `{{ click.world_y }}`, `{{ click.world_z }}`
 
+## Room Click Actions
+
+Each room can define `tap_action`:
+
+- `popup`: open the room popup (default)
+- `navigate`: trigger Home Assistant navigation using `navigation_path`
+- `none`: ignore clicks for that room
+
+`navigation_path` also supports the same room/click template tokens as popup actions.
+
 ## Top-Level Config Keys
 
-- `rooms`: room polygons and names (required)
+- `rooms`: room polygons, names and click behavior (required)
 - `room_popup_actions`: global popup actions used for all rooms
 - `floaters`: 3D entity buttons
 - `floater_overlap`: overlap grouping behavior
@@ -280,6 +292,8 @@ These tokens are supported in `room_popup_actions` values:
 - Room click popup does nothing:
   - Verify `room_popup_actions[].service` is `domain.service`
   - Check Home Assistant logs for service call errors
+- Room navigate does nothing:
+  - Verify `rooms[].navigation_path` is set when `tap_action: navigate`
 - Empty floorplan:
   - Confirm every room has at least 3 polygon points
   - Confirm each `rooms[].area` exists in HA Areas
