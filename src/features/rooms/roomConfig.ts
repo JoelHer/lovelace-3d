@@ -19,6 +19,8 @@ export type PopupAction = {
   closeOnRun: boolean;
 };
 
+export type RoomTapAction = "popup" | "none";
+
 export type RoomActionConfig = {
   configured: boolean;
   actions: PopupAction[];
@@ -26,6 +28,7 @@ export type RoomActionConfig = {
 
 export type RoomEntry = {
   room: Room;
+  tapAction: RoomTapAction;
   actionConfig: RoomActionConfig;
 };
 
@@ -54,6 +57,13 @@ function parsePolygon(rawPolygon: unknown): Vec2XZ[] {
   }
 
   return polygon.length >= 3 ? polygon : [];
+}
+
+function parseRoomTapAction(rawValue: unknown, fallback: RoomTapAction): RoomTapAction {
+  const normalized = String(rawValue ?? "").trim().toLowerCase().replace(/_/g, "-");
+  if (normalized === "popup") return "popup";
+  if (normalized === "none" || normalized === "disabled" || normalized === "ignore") return "none";
+  return fallback;
 }
 
 export function parsePopupActions(rawActions: unknown, contextLabel: string): RoomActionConfig {
@@ -112,10 +122,15 @@ export function parseRoomEntries(rawRooms: unknown, areas: AreaLookup): RoomEntr
     if (polygon.length < 3) continue;
 
     const name = String(roomObj.name ?? "") || areas.getAreaName(areaId) || areaId;
+    const tapAction = parseRoomTapAction(
+      roomObj.tap_action ?? roomObj.press_action ?? roomObj.action ?? roomObj.click_action ?? roomObj.on_click,
+      "popup"
+    );
     const rawRoomActions = roomObj.room_popup_actions ?? roomObj.room_actions;
 
     parsed.push({
       room: { id: areaId, name, polygon },
+      tapAction,
       actionConfig: parsePopupActions(rawRoomActions, `Room "${areaId}"`),
     });
   }

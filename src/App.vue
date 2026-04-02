@@ -139,6 +139,7 @@ import {
   parseRoomEntries,
   type PopupAction,
   type PopupState,
+  type RoomTapAction,
 } from "./features/rooms";
 import type { HassEntityState, HassLike } from "./types/homeAssistant";
 import type { LovelaceCardState, LovelaceConfig } from "./types/lovelace";
@@ -179,6 +180,13 @@ const roomEntries = computed(() =>
 const rooms = computed(() => roomEntries.value.map((entry) => entry.room));
 
 const roomActionConfigs = computed(() => buildRoomActionConfigMap(roomEntries.value));
+const roomTapActions = computed<Record<string, RoomTapAction>>(() => {
+  const map: Record<string, RoomTapAction> = {};
+  for (const entry of roomEntries.value) {
+    map[entry.room.id] = entry.tapAction;
+  }
+  return map;
+});
 
 const globalPopupActionConfig = computed(() =>
   parsePopupActions(cfg.value.room_popup_actions ?? cfg.value.room_actions, "Card")
@@ -1233,6 +1241,13 @@ async function onFloaterLongPressed(floaterId: string) {
 function onRoomClick(event: RoomClickEvent) {
   closeFloaterPopup();
   closeFloaterGroup();
+
+  const tapAction = roomTapActions.value[event.roomId] ?? "popup";
+  if (tapAction === "none") {
+    closeRoomPopup();
+    return;
+  }
+
   roomPopup.value = {
     roomId: event.roomId,
     roomName: event.roomName || event.roomId,

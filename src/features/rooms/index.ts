@@ -11,4 +11,5 @@ export type {
   PopupState,
   RoomActionConfig,
   RoomEntry,
+  RoomTapAction,
 } from "./roomConfig";

@@ -63,9 +63,12 @@ type CameraRotationEditor = {
   y: number;
 };
 
+type RoomTapAction = "popup" | "none";
+
 type RoomEditorEntry = {
   area: string;
   name: string;
+  tapAction: RoomTapAction;
   polygon: Point2Editor[];
   extra: EditorRecord;
 };
@@ -603,10 +606,22 @@ class Lovelace3DEditor extends LitElement {
                       <div class="item-content">
                         <ha-form
                           .hass=${this.hass}
-                          .data=${{ area: room.area, name: room.name }}
+                          .data=${{ area: room.area, name: room.name, tap_action: room.tapAction }}
                           .schema=${[
                             { name: "area", selector: { text: {} } },
                             { name: "name", selector: { text: {} } },
+                            {
+                              name: "tap_action",
+                              selector: {
+                                select: {
+                                  mode: "dropdown",
+                                  options: [
+                                    { label: "Popup", value: "popup" },
+                                    { label: "None", value: "none" },
+                                  ],
+                                },
+                              },
+                            },
                           ]}
                           .computeLabel=${this._computeLabel}
                           @value-changed=${(ev: CustomEvent) => {
@@ -1537,6 +1552,7 @@ class Lovelace3DEditor extends LitElement {
       {
         area: "",
         name: "",
+        tapAction: "popup",
         polygon: this._createDefaultRoomPolygon(),
         extra: {},
       },
@@ -1559,6 +1575,7 @@ class Lovelace3DEditor extends LitElement {
       ...room,
       area: this._nextTextValue(value, "area", room.area),
       name: this._nextTextValue(value, "name", room.name),
+      tapAction: this._normalizeRoomTapAction(value.tap_action, room.tapAction),
     };
 
     this._rooms = nextRooms;
@@ -2041,6 +2058,7 @@ class Lovelace3DEditor extends LitElement {
         ...room.extra,
         area: room.area.trim(),
         polygon: room.polygon.map((point) => [point.x, point.z]),
+        tap_action: room.tapAction,
       };
 
       const name = room.name.trim();
@@ -2257,8 +2275,21 @@ class Lovelace3DEditor extends LitElement {
         return {
           area: String(room.area ?? "").trim(),
           name: String(room.name ?? "").trim(),
+          tapAction: this._normalizeRoomTapAction(
+            room.tap_action ?? room.press_action ?? room.action ?? room.click_action ?? room.on_click,
+            "popup"
+          ),
           polygon: polygon.length > 0 ? polygon : this._createDefaultRoomPolygon(),
-          extra: this._withoutKeys(room, ["area", "name", "polygon"]),
+          extra: this._withoutKeys(room, [
+            "area",
+            "name",
+            "tap_action",
+            "press_action",
+            "action",
+            "click_action",
+            "on_click",
+            "polygon",
+          ]),
         };
       })
       .filter((entry): entry is RoomEditorEntry => !!entry);
@@ -3066,6 +3097,13 @@ class Lovelace3DEditor extends LitElement {
     if (normalized === "more-info") return "more-info";
     if (normalized === "popup") return "popup";
     if (normalized === "toggle") return "toggle";
+    return fallback;
+  }
+
+  private _normalizeRoomTapAction(value: unknown, fallback: RoomTapAction): RoomTapAction {
+    const normalized = String(value ?? "").trim().toLowerCase().replace(/_/g, "-");
+    if (normalized === "popup") return "popup";
+    if (normalized === "none" || normalized === "disabled" || normalized === "ignore") return "none";
     return fallback;
   }
 
